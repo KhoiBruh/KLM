@@ -15,7 +15,7 @@ import copy
 import math
 from typing import Any, Dict
 
-from src.checkpointing import (
+from src.checkpoint import (
     HAS_SAFETENSORS,
     HAS_TORCH,
     count_parameters,

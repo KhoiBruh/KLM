@@ -5,7 +5,7 @@ Tệp này chỉ tập trung định nghĩa mô hình cấp cao (`KLMModel` & `M
 trong khi các thành phần chi tiết được tách gọn sang:
 - `src/layers.py`: `RMSNorm`, `RotaryEmbedding`, `DepthwiseShortConv`, `SwiGLUMLP`
 - `src/attention.py`: `LayerKVCache`, `GatedGroupedQueryAttention`, `TransformerBlock`
-- `src/checkpointing.py`: `count_parameters`, `estimate_config_parameters`,
+- `src/checkpoint.py`: `count_parameters`, `estimate_config_parameters`,
   `save_safetensors_checkpoint`, `load_safetensors_checkpoint`
 """
 
@@ -25,7 +25,7 @@ from .attention import (
     LayerKVCache,
     TransformerBlock
 )
-from .checkpointing import (
+from .checkpoint import (
     _unwrap_model,
     count_parameters,
     estimate_config_parameters,
