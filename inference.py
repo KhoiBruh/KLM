@@ -17,7 +17,7 @@ import torch
 import torch.nn.functional as F
 
 from src.config_loader import FullConfig, load_config
-from src.model import KLMModel, count_parameters, load_safetensors_checkpoint
+from src.model import KLMModel, count_params, load_checkpoint
 from tokenizer.build_tokenizer import Tokenizer
 
 
@@ -117,7 +117,7 @@ def main() -> None:
 	ckpt_dir = cfg.project.checkpoint_path
 	if (ckpt_dir / "model.safetensors").exists() or (ckpt_dir / "model.safetensors.index.json").exists():
 		try:
-			info = load_safetensors_checkpoint(model, ckpt_dir, device)
+			info = load_checkpoint(model, ckpt_dir, device)
 			print(f"[Inference] Đã nạp trọng số Safetensors từ '{info['loaded_from']}' (step={info['step']}).")
 		except Exception as exc:
 			print(f"[Inference] Cảnh báo khi nạp checkpoint ({exc}), chạy với trọng số hiện tại.")
@@ -126,7 +126,7 @@ def main() -> None:
 
 	# Cắt bỏ nhánh MTP trước khi chạy thực tế
 	model.export_for_inference()
-	stats = count_parameters(model)
+	stats = count_params(model)
 	print(
 		f"[Inference] Mô hình sẵn sàng trên '{device}' | "
 		f"Tham số Inference: {stats['inference_params']:,} ({stats['inference_params'] / 1e6:.2f}M)"

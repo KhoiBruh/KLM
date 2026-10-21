@@ -22,7 +22,7 @@ from .config_loader import (
 	TrainingConfig,
 	load_config,
 )
-from .checkpoint import estimate_config_parameters
+from .checkpoint import est_config_params
 
 __all__ = [
 	"ProjectConfig",
@@ -33,5 +33,5 @@ __all__ = [
 	"FullConfig",
 	"SCALE_PRESETS",
 	"load_config",
-	"estimate_config_parameters",
+    "est_config_params",
 ]

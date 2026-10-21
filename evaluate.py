@@ -18,10 +18,10 @@ from typing import Any, Dict
 from src.checkpoint import (
 	HAS_SAFETENSORS,
 	HAS_TORCH,
-	count_parameters,
-	estimate_config_parameters,
-	load_safetensors_checkpoint,
-	save_safetensors_checkpoint,
+	count_params,
+	est_config_params,
+	load_checkpoint,
+	save_checkpoint,
 )
 from src.config_loader import FullConfig, load_config
 
@@ -120,8 +120,8 @@ def print_multi_billion_scale_table(base_cfg: FullConfig) -> None:
 
 	for preset_name in ("10m", "100m", "500m", "1b", "3b", "7b"):
 		cfg_copy = copy.deepcopy(base_cfg)
-		cfg_copy.apply_scale_preset(preset_name)
-		stats = estimate_config_parameters(cfg_copy)
+		cfg_copy.scale_preset(preset_name)
+		stats = est_config_params(cfg_copy)
 		inf_p = stats["inference_params"]
 		human = f"{inf_p / 1e6:.2f}M" if inf_p < 1_000_000_000 else f"{inf_p / 1e9:.2f}B"
 		heads_str = f"{cfg_copy.model.n_heads}/{cfg_copy.model.n_kv_heads}"
@@ -159,10 +159,10 @@ def main() -> None:
 	cfg = load_config(args.config, args.scale)
 
 	if not HAS_TORCH:
-		stats_pre = estimate_config_parameters(cfg)
+		stats_pre = est_config_params(cfg)
 		cfg_inf = copy.deepcopy(cfg)
 		cfg_inf.model.mtp_num_heads = 0
-		stats_post = estimate_config_parameters(cfg_inf)
+		stats_post = est_config_params(cfg_inf)
 		print_parameter_report(stats_pre, stats_post, cfg)
 		if args.all_scales:
 			print_multi_billion_scale_table(cfg)
@@ -183,9 +183,9 @@ def main() -> None:
 	if args.scale in ("1b", "3b", "7b") and not torch.cuda.is_available():
 		with torch.device("meta"):
 			meta_model = KLMModel(cfg)
-			pre = count_parameters(meta_model)
+			pre = count_params(meta_model)
 			meta_model.export_for_inference()
-			post = count_parameters(meta_model)
+			post = count_params(meta_model)
 			print_parameter_report(pre, post, cfg)
 
 		if args.all_scales:
@@ -197,20 +197,20 @@ def main() -> None:
 
 	if (ckpt_dir / "model.safetensors").exists() or (ckpt_dir / "model.safetensors.index.json").exists():
 		try:
-			info = load_safetensors_checkpoint(model, ckpt_dir, device)
+			info = load_checkpoint(model, ckpt_dir, device)
 			print(f"[Evaluate] Đã nạp trọng số từ '{info['loaded_from']}' (step={info['step']}).")
 		except Exception as exc:
 			print(f"[Evaluate] Dùng trọng số khởi tạo để đánh giá cấu trúc ({exc}).")
 	else:
 		print("[Evaluate] Chưa có checkpoint trong 'checkpoints/', đánh giá trên trọng số khởi tạo.")
 
-	stats_pre = count_parameters(model)
+	stats_pre = count_params(model)
 	model.export_for_inference()
-	stats_post = count_parameters(model)
+	stats_post = count_params(model)
 	print_parameter_report(stats_pre, stats_post, cfg)
 
 	if HAS_SAFETENSORS:
-		inf_ckpt = save_safetensors_checkpoint(
+		inf_ckpt = save_checkpoint(
 			model, ckpt_dir, 0, cfg=cfg,
 			export_inference_copy=True
 		)

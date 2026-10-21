@@ -21,22 +21,22 @@ import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
 from .attention import (
-	GatedGroupedQueryAttention,
+	GatedGQA,
 	LayerKVCache,
 	TransformerBlock
 )
 from .checkpoint import (
 	_unwrap_model,
-	count_parameters,
-	estimate_config_parameters,
-	load_safetensors_checkpoint,
-	save_safetensors_checkpoint,
+	count_params,
+	est_config_params,
+	load_checkpoint,
+	save_checkpoint,
 )
 from .config_loader import FullConfig, ModelConfig
 from .layers import (
 	DepthwiseShortConv,
 	RMSNorm,
-	RotaryEmbedding,
+	RotaryEmbed,
 	SwiGLUMLP,
 )
 
@@ -77,7 +77,7 @@ class KLMModel(nn.Module):
 		self.n_layers = self.cfg.n_layers
 
 		self.tok_embeddings = nn.Embedding(self.vocab_size, self.d_model)
-		self.rope = RotaryEmbedding(
+		self.rope = RotaryEmbed(
 			self.cfg.head_dim,
 			self.cfg.max_seq_len,
 			self.cfg.rope_theta,
@@ -357,17 +357,17 @@ class KLMModel(nn.Module):
 
 __all__ = [
 	"RMSNorm",
-	"RotaryEmbedding",
+	"RotaryEmbed",
 	"DepthwiseShortConv",
 	"SwiGLUMLP",
 	"LayerKVCache",
-	"GatedGroupedQueryAttention",
+	"GatedGQA",
 	"TransformerBlock",
 	"ModelOutput",
 	"KLMModel",
-	"count_parameters",
-	"estimate_config_parameters",
-	"save_safetensors_checkpoint",
-	"load_safetensors_checkpoint",
+	"count_params",
+	"est_config_params",
+	"save_checkpoint",
+	"load_checkpoint",
 	"_unwrap_model",
 ]

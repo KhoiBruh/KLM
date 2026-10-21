@@ -35,7 +35,7 @@ except ImportError:
 	HAS_SAFETENSORS = False
 
 
-def estimate_config_parameters(cfg: Union[FullConfig, ModelConfig]) -> Dict[str, Any]:
+def est_config_params(cfg: Union[FullConfig, ModelConfig]) -> Dict[str, Any]:
 	"""
 	Tính toán giải tích chính xác tuyệt đối số lượng tham số độc nhất của kiến trúc từ `ModelConfig`.
 	Hữu ích để kiểm toán tức thì từ <10M lên tới 7B+ tham số mà không tốn RAM.
@@ -100,13 +100,13 @@ def estimate_config_parameters(cfg: Union[FullConfig, ModelConfig]) -> Dict[str,
 	}
 
 
-def count_parameters(model: Any) -> Dict[str, Any]:
+def count_params(model: Any) -> Dict[str, Any]:
 	"""
 	Đếm chính xác số lượng tham số độc nhất trên đối tượng mô hình PyTorch
 	(loại bỏ trùng lặp do Weight Tying và tách biệt rõ tham số MTP).
 	"""
 	if isinstance(model, (FullConfig, ModelConfig)) or not HAS_TORCH:
-		return estimate_config_parameters(model)
+		return est_config_params(model)
 
 	seen_data_ptrs: set[int] = set()
 	total_unique = 0
@@ -177,7 +177,7 @@ def _unwrap_model(model: Any) -> Any:
 	return raw
 
 
-def save_safetensors_checkpoint(
+def save_checkpoint(
 	model: Any,
 	checkpoint_dir: Union[str, Path],
 	step: int,
@@ -285,7 +285,7 @@ def save_safetensors_checkpoint(
 	return saved_primary
 
 
-def load_safetensors_checkpoint(
+def load_checkpoint(
 	model: Any,
 	checkpoint_dir_or_file: Union[str, Path],
 	device: Union[str, Any] = "cpu",

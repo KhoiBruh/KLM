@@ -19,11 +19,11 @@ from torch.nn import Module
 
 from .config_loader import ModelConfig
 from .layers import (
-	DepthwiseShortConv,
-	RMSNorm,
-	RotaryEmbedding,
-	SwiGLUMLP,
-	apply_rotary_pos_emb,
+    DepthwiseShortConv,
+    RMSNorm,
+    RotaryEmbed,
+    SwiGLUMLP,
+    rotary_pos_emb,
 )
 
 
@@ -52,7 +52,7 @@ def repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
 	)
 
 
-class GatedGroupedQueryAttention(Module):
+class GatedGQA(Module):
 	"""
 	Grouped-Query Attention (GQA) tích hợp:
 	- Depthwise ShortConv trước QKV
@@ -107,7 +107,7 @@ class GatedGroupedQueryAttention(Module):
 	def forward(
 		self,
 		x: torch.Tensor,
-		rope: RotaryEmbedding,
+		rope: RotaryEmbed,
 		kv_cache: Optional[LayerKVCache] = None,
 		use_cache: bool = False,
 	) -> Tuple[torch.Tensor, Optional[LayerKVCache]]:
@@ -129,7 +129,7 @@ class GatedGroupedQueryAttention(Module):
 
 		offset = kv_cache.seq_len if kv_cache is not None else 0
 		cos, sin = rope(q, seq_len, offset)
-		q, k = apply_rotary_pos_emb(q, k, cos, sin)
+		q, k = rotary_pos_emb(q, k, cos, sin)
 
 		if kv_cache is not None:
 			k = torch.cat([kv_cache.k, k], 2)
@@ -165,14 +165,14 @@ class TransformerBlock(Module):
 		super().__init__()
 		self.layer_idx = layer_idx
 		self.attn_norm = RMSNorm(cfg.d_model)
-		self.attn = GatedGroupedQueryAttention(cfg)
+		self.attn = GatedGQA(cfg)
 		self.ffn_norm = RMSNorm(cfg.d_model)
 		self.mlp = SwiGLUMLP(cfg.d_model, cfg.d_ff, cfg.dropout)
 
 	def forward(
 		self,
 		x: torch.Tensor,
-		rope: RotaryEmbedding,
+		rope: RotaryEmbed,
 		kv_cache: Optional[LayerKVCache] = None,
 		use_cache: bool = False,
 	) -> Tuple[torch.Tensor, Optional[LayerKVCache]]:

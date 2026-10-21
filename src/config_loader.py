@@ -312,7 +312,7 @@ class FullConfig:
 			"data": asdict(self.data),
 		}
 
-	def apply_scale_preset(self, preset_name: str) -> None:
+	def scale_preset(self, preset_name: str):
 		"""Chuyển đổi nhanh cấu hình sang quy mô lớn hơn (10m, 100m, 500m, 1b, 3b, 7b)."""
 		preset_key = preset_name.strip().lower()
 		if preset_key not in SCALE_PRESETS:
@@ -343,7 +343,7 @@ def _deep_merge_dict(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str
 	return merged
 
 
-def _load_toml_with_includes(path: Path, visited: Optional[set[Path]] = None) -> Dict[str, Any]:
+def _load_toml_includes(path: Path, visited: Optional[set[Path]] = None) -> Dict[str, Any]:
 	"""
 	Đọc tệp TOML và tự động nạp gộp toàn bộ các tệp con được khai báo trong `includes = [...]`.
 	Các khóa khai báo trực tiếp trong tệp cha sẽ được ưu tiên ghi đè lên tệp được include.
@@ -374,7 +374,7 @@ def _load_toml_with_includes(path: Path, visited: Optional[set[Path]] = None) ->
 				raise FileNotFoundError(
 					f"Không tìm thấy tệp cấu hình thành phần '{inc_item}' (được khai báo trong '{resolved}')."
 				)
-			sub_dict = _load_toml_with_includes(inc_resolved, visited=visited)
+			sub_dict = _load_toml_includes(inc_resolved, visited=visited)
 			accumulated = _deep_merge_dict(accumulated, sub_dict)
 
 	return _deep_merge_dict(accumulated, current_raw)
@@ -408,7 +408,7 @@ def load_config(
 			f"Hãy đảm bảo tệp 'config.toml' nằm ở thư mục gốc dự án ({PROJECT_ROOT})."
 		)
 
-	raw_copy = _load_toml_with_includes(resolved_path)
+	raw_copy = _load_toml_includes(resolved_path)
 	project_cfg = ProjectConfig(**_filter_dataclass_kwargs(ProjectConfig, raw_copy.get("project", {})))
 	model_cfg = ModelConfig(**_filter_dataclass_kwargs(ModelConfig, raw_copy.get("model", {})))
 	optim_cfg = OptimizerConfig(**_filter_dataclass_kwargs(OptimizerConfig, raw_copy.get("optimizer", {})))

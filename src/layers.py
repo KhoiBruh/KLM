@@ -20,7 +20,7 @@ import torch.nn.functional as F
 class RMSNorm(nn.Module):
 	"""Chuẩn hóa Root Mean Square Layer Normalization tốc độ cao."""
 
-	def __init__(self, dim: int, eps: float = 1e-6) -> None:
+	def __init__(self, dim: int, eps: float = 1e-6):
 		super().__init__()
 		self.eps = eps
 		self.weight = nn.Parameter(torch.ones(dim))
@@ -33,7 +33,7 @@ class RMSNorm(nn.Module):
 		return (self.weight * x_normed).to(orig_dtype)
 
 
-class RotaryEmbedding(nn.Module):
+class RotaryEmbed(nn.Module):
 	"""
 	Rotary Positional Embedding (RoPE) hỗ trợ mở rộng ngữ cảnh (`scaling_factor`)
 	và tự động mở rộng bộ đệm `cos`/`sin` khi gặp chuỗi dài hơn `max_seq_len`.
@@ -45,7 +45,7 @@ class RotaryEmbedding(nn.Module):
 		max_seq_len: int = 2048,
 		theta: float = 10000.0,
 		scaling_factor: float = 1.0,
-	) -> None:
+	):
 		super().__init__()
 		self.dim = dim
 		self.max_seq_len = max_seq_len
@@ -63,7 +63,7 @@ class RotaryEmbedding(nn.Module):
 		self.max_seq_len = max(self.max_seq_len, seq_len)
 		t = torch.arange(self.max_seq_len, device=self.inv_freq.device, dtype=torch.float32)
 		freqs = torch.outer(t, self.inv_freq)
-		emb = torch.cat((freqs, freqs), dim=-1)
+		emb = torch.cat((freqs, freqs), -1)
 		self.register_buffer("cos_cached", emb.cos(), persistent=False)
 		self.register_buffer("sin_cached", emb.sin(), persistent=False)
 
@@ -85,7 +85,7 @@ def rotate_half(x: torch.Tensor) -> torch.Tensor:
 	return torch.cat((-x2, x1), dim=-1)
 
 
-def apply_rotary_pos_emb(
+def rotary_pos_emb(
 	q: torch.Tensor,
 	k: torch.Tensor,
 	cos: torch.Tensor,
@@ -105,7 +105,7 @@ class DepthwiseShortConv(nn.Module):
 	giúp nắm bắt ngữ cảnh cục bộ của chuỗi BPE và hỗ trợ trạng thái đệm O(1) khi sinh văn bản.
 	"""
 
-	def __init__(self, d_model: int, kernel_size: int = 5) -> None:
+	def __init__(self, d_model: int, kernel_size: int = 5):
 		super().__init__()
 		self.d_model = d_model
 		self.kernel_size = kernel_size
@@ -161,7 +161,7 @@ class DepthwiseShortConv(nn.Module):
 class SwiGLUMLP(nn.Module):
 	"""Mạng tiến truyền SwiGLU (SiLU Gated Linear Unit)."""
 
-	def __init__(self, d_model: int, d_ff: int, dropout: float = 0.0) -> None:
+	def __init__(self, d_model: int, d_ff: int, dropout: float = 0.0):
 		super().__init__()
 		self.gate_proj = nn.Linear(d_model, d_ff, bias=False)
 		self.up_proj = nn.Linear(d_model, d_ff, bias=False)

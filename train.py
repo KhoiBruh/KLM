@@ -25,9 +25,9 @@ from src.config_loader import FullConfig, load_config
 from src.dataset import MemmapTokenDataset, get_tst_pool_factor
 from src.model import (
 	KLMModel,
-	count_parameters,
-	load_safetensors_checkpoint,
-	save_safetensors_checkpoint,
+	count_params,
+	load_checkpoint,
+	save_checkpoint,
 )
 from src.optim import build_optimizer
 from src.rl_env import GRPOTrainer
@@ -77,7 +77,7 @@ def wrap_distributed_or_compile(
 		if not dist.is_initialized():
 			backend = "nccl" if device.type == "cuda" else "gloo"
 			dist.init_process_group(backend=backend)
-		if strategy == "fsdp" or (strategy == "auto" and count_parameters(model)["inference_params"] >= 500_000_000):
+		if strategy == "fsdp" or (strategy == "auto" and count_params(model)["inference_params"] >= 500_000_000):
 			from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 
 			wrapped = FSDP(wrapped, device_id=device if device.type == "cuda" else None)
@@ -134,7 +134,7 @@ def train(
 	if cfg is None:
 		cfg = load_config(scale_override=scale_override)
 	elif scale_override:
-		cfg.apply_scale_preset(scale_override)
+		cfg.scale_preset(scale_override)
 
 	if stage_override:
 		cfg.training.stage = stage_override.lower()
@@ -153,7 +153,7 @@ def train(
 
 	tokenizer = Tokenizer(cfg=cfg, auto_build=True)
 	base_model = KLMModel(cfg).to(device=device)
-	param_stats = count_parameters(base_model)
+	param_stats = count_params(base_model)
 
 	print("=" * 78)
 	print(f" KHỞI ĐỘNG HUẤN LUYỆN: {cfg.project.name.upper()} | STAGE: {cfg.training.stage.upper()}")
@@ -167,10 +167,10 @@ def train(
 	)
 	print(
 		f" - Tham số Huấn luyện    : {param_stats['training_params']:,} ({param_stats['training_params'] / 1e6:.3f}M)"
-		)
+	)
 	print(
 		f" - Tham số Thi đấu (Inf) : {param_stats['inference_params']:,} ({param_stats['inference_params'] / 1e6:.3f}M)"
-		)
+	)
 	print(f" - Định dạng Checkpoint  : Safetensors ({cfg.project.checkpoint_path})")
 	print("=" * 78)
 
@@ -187,7 +187,7 @@ def train(
 	start_step = 0
 	if (ckpt_dir / "model.safetensors").exists() or (ckpt_dir / "model.safetensors.index.json").exists():
 		try:
-			resume_info = load_safetensors_checkpoint(
+			resume_info = load_checkpoint(
 				base_model, ckpt_dir, device, optimizer
 			)
 			start_step = int(resume_info.get("step", 0))
@@ -210,7 +210,7 @@ def train(
 			metrics = grpo_trainer.grpo_step(optimizer, scaler, amp_dtype, use_amp)
 			if step == 1 or step % max(
 				1, min(10, cfg.training.eval_interval)
-				) == 0 or step == start_step + total_rl_steps:
+			) == 0 or step == start_step + total_rl_steps:
 				elapsed = time.perf_counter() - t0
 				print(
 					f"[GRPO Step {step:05d}/{start_step + total_rl_steps:05d}] "
@@ -219,7 +219,7 @@ def train(
 					f"kl={metrics['kl']:.4f} | time={elapsed:.1f}s"
 				)
 			if step % cfg.training.save_interval == 0 or step == start_step + total_rl_steps:
-				saved_path = save_safetensors_checkpoint(
+				saved_path = save_checkpoint(
 					model, ckpt_dir, step, optimizer, cfg=cfg
 				)
 				print(f"[Safetensors] Đã lưu checkpoint GRPO tại: {saved_path}")
@@ -306,7 +306,7 @@ def train(
 				)
 
 			if step % cfg.training.save_interval == 0 or step == total_steps:
-				saved_path = save_safetensors_checkpoint(
+				saved_path = save_checkpoint(
 					model, ckpt_dir, step, optimizer,
 					{"stage": stage, "lr_mult": lr_mult}, cfg
 				)
@@ -314,7 +314,7 @@ def train(
 
 	except KeyboardInterrupt:
 		print(f"\n[Dừng khẩn cấp] Phát hiện Ctrl+C! Đang lưu checkpoint tại step {step}...")
-		saved_path = save_safetensors_checkpoint(
+		saved_path = save_checkpoint(
 			model, ckpt_dir, step, optimizer,
 			{"stage": stage, "lr_mult": lr_mult}, cfg
 		)
