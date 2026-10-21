@@ -34,7 +34,7 @@ from src.rl_env import GRPOTrainer
 from tokenizer.build_tokenizer import Tokenizer
 
 
-def set_global_seed(seed: int) -> None:
+def set_global_seed(seed: int):
 	random.seed(seed)
 	np.random.seed(seed)
 	torch.manual_seed(seed)
@@ -53,7 +53,10 @@ def resolve_device(cfg: FullConfig) -> Tuple[torch.device, torch.dtype, bool]:
 
 	dtype_str = cfg.project.dtype.lower()
 	if device.type == "cuda":
-		if dtype_str in ("bfloat16", "bf16", "fp8") and torch.cuda.is_bf16_supported():
+		if (
+			dtype_str in ("bfloat16", "bf16", "fp8") and
+			torch.cuda.is_bf16_supported()
+		):
 			return device, torch.bfloat16, True
 		if dtype_str in ("float16", "fp16", "bfloat16", "bf16"):
 			return device, torch.float16, True
@@ -74,7 +77,10 @@ def wrap_distributed_or_compile(
 		if not dist.is_initialized():
 			backend = "nccl" if device.type == "cuda" else "gloo"
 			dist.init_process_group(backend=backend)
-		if strategy == "fsdp" or (strategy == "auto" and count_params(model)["inference_params"] >= 500_000_000):
+		if strategy == "fsdp" or (
+			strategy == "auto" and
+			count_params(model)["inference_params"] >= 500_000_000
+		):
 			from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 
 			wrapped = FSDP(wrapped, device_id=device if device.type == "cuda" else None)
@@ -93,7 +99,7 @@ def wrap_distributed_or_compile(
 	return wrapped
 
 
-def apply_diffusion_mask(
+def diffusion_mask(
 	clean_tokens: torch.Tensor,
 	cfg: FullConfig,
 	mask_token_id: int,
@@ -111,20 +117,20 @@ def apply_diffusion_mask(
 	schedule = getattr(cfg.training, "noise_schedule", "uniform")
 
 	if schedule == "cosine":
-		u = torch.rand(bsz, 1, device=device)
-		r = torch.cos(u * (math.pi / 2.0)).clamp(min=min_ratio, max=max_ratio)
+		u = torch.rand(bsz, 1, device)
+		r = torch.cos(u * (math.pi / 2.0)).clamp(min_ratio, max_ratio)
 	else:
-		r = torch.empty(bsz, 1, device=device).uniform_(min_ratio, max_ratio)
+		r = torch.empty(bsz, 1, device).uniform_(min_ratio, max_ratio)
 
 	mean_ratio = float(r.mean().item())
-	rand_matrix = torch.rand(bsz, seq_len, device=device)
+	rand_matrix = torch.rand(bsz, seq_len, device)
 	mask = rand_matrix < r
 
 	# Đảm bảo mỗi dòng có ít nhất 1 token bị mask
-	zero_mask = mask.sum(dim=1) == 0
+	zero_mask = mask.sum(1) == 0
 	if zero_mask.any():
 		num_zeros = int(zero_mask.sum().item())
-		rand_pos = torch.randint(0, seq_len, (num_zeros,), device=device)
+		rand_pos = torch.randint(0, seq_len, (num_zeros,), device)
 		mask[zero_mask, rand_pos] = True
 
 	if is_sft:
@@ -154,14 +160,15 @@ def evaluate_validation_loss(
 	losses = []
 	batch_size = max(1, min(cfg.training.micro_batch_size, 16))
 	for _ in range(eval_batches):
-		clean_tokens, _ = val_dataset.sample_batch(batch_size=batch_size, device=device)
-		noisy_input, targets, mask, _ = apply_diffusion_mask(
-			clean_tokens, cfg, mask_token_id=mask_token_id, is_sft=False
+		clean_tokens, _ = val_dataset.sample_batch(batch_size, device)
+		noisy_input, targets, mask, _ = diffusion_mask(
+			clean_tokens, cfg, mask_token_id
 		)
-		with torch.amp.autocast(device_type=device.type, dtype=amp_dtype, enabled=use_amp):
+		with torch.amp.autocast(device.type, amp_dtype, use_amp):
 			out = model(input_ids=noisy_input, targets=targets, mask_indices=mask)
 			if out.loss is not None:
 				losses.append(float(out.loss.item()))
+
 	model.train()
 	mean_loss = float(np.mean(losses)) if losses else 0.0
 	ppl = float(math.exp(min(20.0, mean_loss)))
@@ -188,6 +195,7 @@ def train(
 			cfg.rl_grpo.steps = max_steps_override
 		else:
 			cfg.training.total_steps = max_steps_override
+
 	if batch_size_override is not None:
 		cfg.training.micro_batch_size = batch_size_override
 	if grad_accum_override is not None:
@@ -196,7 +204,7 @@ def train(
 	set_global_seed(cfg.project.seed)
 	device, amp_dtype, use_amp = resolve_device(cfg)
 
-	tokenizer = Tokenizer(cfg=cfg, auto_build=True)
+	tokenizer = Tokenizer(cfg=cfg)
 	base_model = KLMModel(cfg).to(device=device)
 	param_stats = count_params(base_model)
 
@@ -229,7 +237,10 @@ def train(
 	# Khôi phục từ checkpoint .safetensors nếu có
 	ckpt_dir = cfg.project.checkpoint_path
 	start_step = 0
-	if (ckpt_dir / "model.safetensors").exists() or (ckpt_dir / "model.safetensors.index.json").exists():
+	if (
+		(ckpt_dir / "model.safetensors").exists() or
+		(ckpt_dir / "model.safetensors.index.json").exists()
+	):
 		try:
 			resume_info = load_checkpoint(base_model, ckpt_dir, device, optimizer)
 			start_step = int(resume_info.get("step", 0))
@@ -240,7 +251,11 @@ def train(
 	model = wrap_distributed_or_compile(base_model, cfg, device)
 	scaler = torch.amp.GradScaler(
 		device.type,
-		enabled=(use_amp and amp_dtype == torch.float16 and device.type == "cuda"),
+		enabled=(
+			use_amp and
+			amp_dtype == torch.float16 and
+			device.type == "cuda"
+		)
 	)
 
 	if stage == "grpo":
@@ -249,15 +264,22 @@ def train(
 		t0 = time.perf_counter()
 		for step in range(start_step + 1, start_step + total_rl_steps + 1):
 			metrics = grpo_trainer.grpo_step(optimizer, scaler, amp_dtype, use_amp)
-			if step == 1 or step % max(1, min(10, cfg.training.eval_interval)) == 0 or step == start_step + total_rl_steps:
+
+			if (
+				step == 1 or
+				step % max(1, min(10, cfg.training.eval_interval)) == 0 or
+				step == start_step + total_rl_steps
+			):
 				elapsed = time.perf_counter() - t0
 				print(
 					f"[GRPO Step {step:05d}/{start_step + total_rl_steps:05d}] "
 					f"loss={metrics['loss']:.4f} | reward={metrics['mean_reward']:.3f} | time={elapsed:.1f}s"
 				)
+
 			if step % cfg.training.save_interval == 0 or step == start_step + total_rl_steps:
 				saved_path = save_checkpoint(model, ckpt_dir, step, optimizer, cfg=cfg)
 				print(f"[Safetensors] Đã lưu checkpoint GRPO tại: {saved_path}")
+
 		return
 
 	# Pre-training hoặc SFT với Masked Generative Modeling (LLaDA)
@@ -282,16 +304,11 @@ def train(
 			accum_ratio = 0.0
 
 			for _ in range(grad_accum):
-				clean_tokens, _ = train_dataset.sample_batch(
-					batch_size=micro_bsz,
-					device=device,
-				)
-				noisy_input, targets, mask, ratio = apply_diffusion_mask(
-					clean_tokens,
-					cfg,
-					mask_token_id=tokenizer.mask_id,
-					is_sft=is_sft,
-					assistant_token_id=tokenizer.assistant_id,
+				clean_tokens, _ = train_dataset.sample_batch(micro_bsz, device)
+				noisy_input, targets, mask, ratio = diffusion_mask(
+					clean_tokens, cfg,
+					tokenizer.mask_id, is_sft,
+					tokenizer.assistant_id
 				)
 				accum_ratio += ratio / grad_accum
 

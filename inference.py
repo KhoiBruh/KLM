@@ -17,7 +17,7 @@ from typing import List
 
 import torch
 
-from src.config_loader import FullConfig, load_config
+from src.config_loader import load_config
 from src.model import KLMModel, count_params, load_checkpoint
 from tokenizer.build_tokenizer import Tokenizer
 
@@ -36,9 +36,9 @@ def decode_masked_tokens(
 	parts: List[str] = []
 	buffer: List[int] = []
 
-	def flush_buffer() -> None:
+	def flush_buffer():
 		if buffer:
-			parts.append(tokenizer.decode(buffer, skip_special_tokens=True))
+			parts.append(tokenizer.decode(buffer))
 			buffer.clear()
 
 	for tid in token_ids:
@@ -63,7 +63,7 @@ def generate_llada(
 	temperature: float = 0.0,
 	remask_schedule: str = "cosine",
 	stream: bool = True,
-	print_each_step: bool = False,
+	print_each_step: bool = False
 ) -> str:
 	"""
 	Sinh văn bản với LLaDA Masked Diffusion Sampler kèm theo đồng hồ đo tok/s thời gian thực.
@@ -80,7 +80,7 @@ def generate_llada(
 	t0 = time.perf_counter()
 	last_status_len = 0
 
-	def step_callback(step: int, total_steps: int, current_tensor: torch.Tensor) -> None:
+	def step_callback(step: int, total_steps: int, current_tensor: torch.Tensor):
 		nonlocal last_status_len
 		if not stream:
 			return
@@ -92,7 +92,8 @@ def generate_llada(
 		step_speed = step / dt
 
 		preview_text = decode_masked_tokens(
-			tokenizer, gen_tokens, model.mask_token_id, mask_char="·"
+			tokenizer, gen_tokens,
+			model.mask_token_id, "·"
 		)
 		preview_clean = preview_text.replace("\n", " ").strip()
 		if len(preview_clean) > 60:
@@ -127,7 +128,7 @@ def generate_llada(
 		sys.stdout.flush()
 
 	gen_ids = generated_tensor[0, prompt_len:].tolist()
-	decoded_text = tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
+	decoded_text = tokenizer.decode(gen_ids).strip()
 
 	speed = gen_length / elapsed
 	step_speed = steps / elapsed
@@ -164,7 +165,10 @@ def main() -> None:
 	model = KLMModel(cfg).to(device)
 
 	ckpt_dir = cfg.project.checkpoint_path
-	if (ckpt_dir / "model.safetensors").exists() or (ckpt_dir / "model.safetensors.index.json").exists():
+	if (
+		(ckpt_dir / "model.safetensors").exists() or
+		(ckpt_dir / "model.safetensors.index.json").exists()
+	):
 		try:
 			info = load_checkpoint(model, ckpt_dir, device)
 			print(f"[Inference] Đã nạp trọng số Safetensors từ '{info['loaded_from']}' (step={info['step']}).")
@@ -214,7 +218,7 @@ def main() -> None:
 		generate_llada(
 			model, tokenizer, user_in, device,
 			args.gen_length, args.steps, args.temperature, args.schedule,
-			stream=stream_enabled, print_each_step=args.show_steps,
+			stream_enabled, args.show_steps
 		)
 
 

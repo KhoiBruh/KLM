@@ -159,7 +159,7 @@ def main() -> None:
 	from src.model import KLMModel
 	from src.rl_env import VerifiableMathLogicEnv
 	from tokenizer.build_tokenizer import Tokenizer
-	from train import apply_diffusion_mask
+	from train import diffusion_mask
 
 	device = torch.device(
 		"cuda" if (cfg.project.device.lower().startswith("cuda") and torch.cuda.is_available())
@@ -215,7 +215,7 @@ def main() -> None:
 	with torch.no_grad():
 		for _ in range(6):
 			clean_tokens, _ = val_dataset.sample_batch(batch_size, device)
-			noisy_input, targets, mask, _ = apply_diffusion_mask(
+			noisy_input, targets, mask, _ = diffusion_mask(
 				clean_tokens, cfg, mask_token_id=tokenizer.mask_id, is_sft=False
 			)
 			out = model(input_ids=noisy_input, targets=targets, mask_indices=mask)

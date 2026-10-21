@@ -21,7 +21,7 @@ from src.config_loader import load_config
 from src.data_sources import load_source_meta, prepare_source
 
 
-def main() -> None:
+def main():
 	parser = argparse.ArgumentParser(description="Token hoá nguồn dữ liệu trong config.toml thành shard .bin")
 	parser.add_argument("--config", default="config.toml")
 	parser.add_argument("--stage", default=None, choices=["pretrain", "sft", "grpo"])
@@ -31,7 +31,9 @@ def main() -> None:
 	args = parser.parse_args()
 
 	cfg = load_config(args.config)
-	sources = cfg.data.active_sources(args.stage) if args.stage else [s for s in cfg.data.sources if s.enabled]
+	sources = cfg.data.active_sources(args.stage) if args.stage \
+		else [s for s in cfg.data.sources if s.enabled]
+
 	if args.only:
 		sources = [s for s in sources if s.name in args.only]
 
