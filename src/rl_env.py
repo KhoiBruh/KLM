@@ -44,7 +44,7 @@ class VerifiableMathLogicEnv:
 
 	ANSWER_REGEX = re.compile(r"<\|answer\|>\s*([-+]?\d+)|Answer:\s*([-+]?\d+)|([-+]?\d+)\s*$")
 
-	def __init__(self, seed: int = 42) -> None:
+	def __init__(self, seed: int = 42):
 		self.rng = random.Random(seed)
 
 	def sample_task(self, difficulty: int = 1) -> VerifiableTask:
@@ -177,7 +177,7 @@ class GRPOTrainer:
 		tokenizer: Tokenizer,
 		cfg: Optional[FullConfig] = None,
 		device: Optional[torch.device] = None,
-	) -> None:
+	):
 		self.cfg = cfg or load_config()
 		self.model = model
 		self.raw_model: KLMModel = _unwrap_model(model)

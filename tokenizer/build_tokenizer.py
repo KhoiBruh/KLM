@@ -153,7 +153,7 @@ class Tokenizer:
 		tokenizer_path: Optional[Union[str, Path]] = None,
 		cfg: Optional[FullConfig] = None,
 		auto_build: bool = True,
-	) -> None:
+	):
 		self.cfg = cfg or load_config()
 		if tokenizer_path is None:
 			self.tokenizer_path = self.cfg.project.tokenizer_path / "tokenizer.json"
@@ -265,7 +265,7 @@ class Tokenizer:
 		return out_bytes.decode("utf-8", errors="replace")
 
 
-def main() -> None:
+def main():
 	cfg = load_config()
 	out_file = build_bpe_tokenizer(cfg=cfg)
 	tok = Tokenizer(out_file, cfg, False)

@@ -35,7 +35,7 @@ from src.rl_env import GRPOTrainer
 from tokenizer.build_tokenizer import Tokenizer
 
 
-def set_global_seed(seed: int) -> None:
+def set_global_seed(seed: int):
 	random.seed(seed)
 	np.random.seed(seed)
 	torch.manual_seed(seed)
@@ -183,7 +183,7 @@ def train(
 	scale_override: Optional[str] = None,
 	batch_size_override: Optional[int] = None,
 	grad_accum_override: Optional[int] = None,
-) -> None:
+):
 	if cfg is None:
 		cfg = load_config(scale_override=scale_override)
 	elif scale_override:

@@ -132,15 +132,17 @@ class ModelConfig:
 	sampling_steps: int = 64
 	use_qk_norm: bool = True
 
-	def apply_preset_if_needed(self) -> None:
+	def apply_preset_if_needed(self):
 		preset_key = self.scale_preset.strip().lower()
 		if preset_key in SCALE_PRESETS and preset_key != "custom":
 			preset_vals = SCALE_PRESETS[preset_key]
 			for k, v in preset_vals.items():
 				setattr(self, k, v)
+
 		# Enforce head dimension and head divisibility consistency
 		if self.head_dim <= 0:
 			self.head_dim = self.d_model // self.n_heads
+
 		if self.n_heads % self.n_kv_heads != 0:
 			raise ValueError(
 				f"n_heads ({self.n_heads}) must be divisible by n_kv_heads ({self.n_kv_heads})."
@@ -259,16 +261,23 @@ class DataConfig:
 		stage = stage.lower()
 		return [
 			s for s in self.sources
-			if s.enabled and s.weight > 0 and (not s.stages or stage in [x.lower() for x in s.stages])
+			if s.enabled and s.weight > 0 and (
+				not s.stages or stage in [x.lower() for x in s.stages]
+			)
 		]
 
-	def weights_at(self, progress: float, sources: List[DataSourceConfig]) -> List[float]:
+	def weights_at(
+		self,
+		progress: float,
+		sources: List[DataSourceConfig]
+	) -> List[float]:
 		"""Returns unnormalized source blending weights at given `progress` in [0, 1]."""
 		override: Dict[str, float] = {}
 		for phase in sorted(self.phases, key=lambda p: p.until):
 			if progress < phase.until:
 				override = phase.weights
 				break
+
 		return [float(override.get(s.name, s.weight)) for s in sources]
 
 
@@ -292,12 +301,13 @@ class FullConfig:
 			"data": asdict(self.data),
 		}
 
-	def scale_preset(self, preset_name: str) -> None:
+	def scale_preset(self, preset_name: str):
 		"""Quickly scales configuration to target size preset (10m, 100m, 500m, 1b, 3b, 7b)."""
 		preset_key = preset_name.strip().lower()
 		if preset_key not in SCALE_PRESETS:
 			valid = ", ".join(SCALE_PRESETS.keys())
 			raise ValueError(f"Invalid preset '{preset_name}'. Supported: {valid}")
+
 		self.model.scale_preset = preset_key
 		self.model.apply_preset_if_needed()
 		self.project.name = f"slm-killer-{preset_key}"
@@ -308,7 +318,10 @@ def _filter_dataclass_kwargs(cls: Any, data: Dict[str, Any]) -> Dict[str, Any]:
 	return {k: v for k, v in data.items() if k in valid_fields}
 
 
-def _deep_merge_dict(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+def _deep_merge_dict(
+	base: Dict[str, Any],
+	override: Dict[str, Any]
+) -> Dict[str, Any]:
 	"""Recursively merges two TOML dictionaries."""
 	merged = copy.deepcopy(base)
 	for k, v in override.items():
@@ -316,10 +329,14 @@ def _deep_merge_dict(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str
 			merged[k] = _deep_merge_dict(merged[k], v)
 		else:
 			merged[k] = copy.deepcopy(v)
+
 	return merged
 
 
-def _load_toml_includes(path: Path, visited: Optional[set[Path]] = None) -> Dict[str, Any]:
+def _load_toml_includes(
+	path: Path,
+	visited: Optional[set[Path]] = None
+) -> Dict[str, Any]:
 	"""Loads TOML configuration file and resolves all sub-files declared in `includes = [...]`."""
 	resolved = path.resolve()
 	if visited is None:
@@ -328,7 +345,7 @@ def _load_toml_includes(path: Path, visited: Optional[set[Path]] = None) -> Dict
 		raise ValueError(f"Circular include detected at: {resolved}")
 	visited.add(resolved)
 
-	current_raw: Dict[str, Any] = tomllib.loads(resolved.read_text(encoding="utf-8-sig"))
+	current_raw: Dict[str, Any] = tomllib.loads(resolved.read_text("utf-8-sig"))
 	include_list = current_raw.pop("includes", None)
 
 	accumulated: Dict[str, Any] = {}
@@ -400,6 +417,7 @@ def load_config(
 
 	if scale_override:
 		model_cfg.scale_preset = scale_override
+
 	model_cfg.apply_preset_if_needed()
 
 	return FullConfig(

@@ -40,7 +40,7 @@ def generate_synthetic_corpus_bin(
 	"""
 	bin_path.parent.mkdir(parents=True, exist_ok=True)
 	rng = random.Random(seed)
-	tok = Tokenizer(cfg=cfg, auto_build=True)
+	tok = Tokenizer(cfg=cfg)
 	dtype = _select_memmap_dtype(cfg.model.vocab_size)
 
 	buffer: list[int] = []
@@ -118,13 +118,23 @@ class MemmapTokenDataset(Dataset):
 	- Otherwise loads single `.bin` file (generating synthetic tokens if absent).
 	"""
 
-	def __new__(cls, cfg: Optional[FullConfig] = None, split: str = "train", *args: Any, **kwargs: Any):
+	def __new__(
+		cls,
+		cfg: Optional[FullConfig] = None,
+		split: str = "train",
+		*args: Any, **kwargs: Any
+	):
 		cfg = cfg or load_config()
-		if cls is MemmapTokenDataset and kwargs.get("bin_path") is None and cfg.data.active_sources(cfg.training.stage):
+		if (
+			cls is MemmapTokenDataset and
+			kwargs.get("bin_path") is None and
+			cfg.data.active_sources(cfg.training.stage)
+		):
 			return MixtureTokenDataset(cfg, split)
+
 		return super().__new__(cls)
 
-	def set_progress(self, step: int, total_steps: int) -> None:
+	def set_progress(self, step: int, total_steps: int):
 		"""Unused for single file dataset (kept for MixtureTokenDataset compatibility)."""
 
 	def __init__(
@@ -132,7 +142,7 @@ class MemmapTokenDataset(Dataset):
 		cfg: Optional[FullConfig] = None,
 		split: str = "train",
 		bin_path: Optional[Union[str, Path]] = None,
-	) -> None:
+	):
 		super().__init__()
 		self.cfg = cfg or load_config()
 		self.split = split
@@ -148,7 +158,10 @@ class MemmapTokenDataset(Dataset):
 			self.bin_path = ckpt_dir / f"{split}_tokens.bin"
 
 		min_required_tokens = max(65_536, (self.seq_len + 1) * 64)
-		if not self.bin_path.exists() or self.bin_path.stat().st_size < min_required_tokens * self.dtype.itemsize:
+		if (
+			not self.bin_path.exists() or
+			self.bin_path.stat().st_size < min_required_tokens * self.dtype.itemsize
+		):
 			num_syn = 262_144 if split == "train" else 32_768
 			seed = self.cfg.project.seed + (0 if split == "train" else 999)
 			print(
@@ -221,7 +234,11 @@ class MemmapTokenDataset(Dataset):
 		return x, y
 
 
-def _apply_sft_mask(x_row: np.ndarray, y_row: np.ndarray, assistant_token_id: int) -> None:
+def _apply_sft_mask(
+	x_row: np.ndarray,
+	y_row: np.ndarray,
+	assistant_token_id: int
+):
 	assist_positions = np.where(x_row == assistant_token_id)[0]
 	if len(assist_positions) > 0:
 		y_row[: int(assist_positions[0])] = -100
@@ -235,7 +252,7 @@ class MixtureTokenDataset:
 	  3. Randomly slice `seq_len + 1` tokens.
 	"""
 
-	def __init__(self, cfg: FullConfig, split: str = "train") -> None:
+	def __init__(self, cfg: FullConfig, split: str = "train"):
 		self.cfg = cfg
 		self.split = split
 		self.seq_len = cfg.model.max_seq_len
@@ -284,18 +301,19 @@ class MixtureTokenDataset:
 		if split == "train":
 			self.describe()
 
-	def set_progress(self, step: int, total_steps: int) -> None:
+	def set_progress(self, step: int, total_steps: int):
 		"""Updates source blending probabilities according to progress."""
 		progress = step / max(1, total_steps)
 		w = np.asarray(
-			self.cfg.data.weights_at(progress, [p["source"] for p in self.pools]), dtype=np.float64
+			self.cfg.data.weights_at(progress, [p["source"] for p in self.pools]),
+			dtype=np.float64
 		)
 		w = np.clip(w, 0.0, None)
 		if w.sum() <= 0:
 			w = np.ones_like(w)
 		self.source_probs = w / w.sum()
 
-	def describe(self) -> None:
+	def describe(self):
 		print("[Data] Training dataset blend:")
 		for p, prob in zip(self.pools, self.source_probs):
 			print(
@@ -327,6 +345,7 @@ class MixtureTokenDataset:
 			segment = np.asarray(arr[start: start + T + 1], dtype=np.int64)
 			if segment.max() >= self.vocab_size:
 				segment %= self.vocab_size
+
 			x_np[i] = segment[:-1]
 			y_np[i] = segment[1:]
 			if sft_masking:
@@ -336,4 +355,8 @@ class MixtureTokenDataset:
 		y = torch.from_numpy(y_np)
 		if torch.device(device).type == "cuda":
 			x, y = x.pin_memory(), y.pin_memory()
-		return x.to(device, non_blocking=True), y.to(device, non_blocking=True)
+
+		return (
+			x.to(device, non_blocking=True),
+			y.to(device, non_blocking=True)
+		)

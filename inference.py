@@ -141,7 +141,7 @@ def generate_llada(
 	return decoded_text
 
 
-def main() -> None:
+def main():
 	parser = argparse.ArgumentParser(
 		description="Inference and text generation with LLaDA Diffusion Sampler & Live Streaming."
 	)

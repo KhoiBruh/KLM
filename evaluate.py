@@ -92,7 +92,7 @@ def print_parameter_report(
 	return stats_post
 
 
-def print_multi_billion_scale_table(base_cfg: FullConfig) -> None:
+def print_multi_billion_scale_table(base_cfg: FullConfig):
 	"""
 	Quickly verify all scaling presets from 10M up to 7B+ parameters
 	(0MB RAM/VRAM required) to validate architectural scaling.
@@ -121,7 +121,7 @@ def print_multi_billion_scale_table(base_cfg: FullConfig) -> None:
 	print("=" * 88)
 
 
-def main() -> None:
+def main():
 	parser = argparse.ArgumentParser(description="Model evaluation and parameter audit for KLM LLaDA.")
 	parser.add_argument("--config", type=str, default="config.toml", help="Path to config.toml")
 	parser.add_argument(

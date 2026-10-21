@@ -56,7 +56,7 @@ class KLMModel(nn.Module):
 	Supports Masked Cross-Entropy, QK-Norm, Gradient Checkpointing, and LLaDA Sampler.
 	"""
 
-	def __init__(self, cfg: Union[FullConfig, ModelConfig]) -> None:
+	def __init__(self, cfg: Union[FullConfig, ModelConfig]):
 		super().__init__()
 		if isinstance(cfg, FullConfig):
 			self.full_cfg: Optional[FullConfig] = cfg
@@ -95,7 +95,7 @@ class KLMModel(nn.Module):
 		if self.cfg.tie_word_embeddings:
 			self.lm_head.weight = self.tok_embeddings.weight
 
-	def _init_weights(self) -> None:
+	def _init_weights(self):
 		std = 0.02
 		for module_name, module in self.named_modules():
 			if isinstance(module, nn.Linear):
@@ -108,7 +108,7 @@ class KLMModel(nn.Module):
 			elif isinstance(module, nn.Embedding):
 				nn.init.normal_(module.weight, 0.0, std)
 
-	def tie_weights(self) -> None:
+	def tie_weights(self):
 		"""Restores weight tying after loading state from safetensors."""
 		if self.cfg.tie_word_embeddings:
 			self.lm_head.weight = self.tok_embeddings.weight

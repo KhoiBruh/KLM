@@ -71,7 +71,7 @@ class Muon(Optimizer):
 		nesterov: bool = True,
 		ns_steps: int = 5,
 		weight_decay: float = 0.01,
-	) -> None:
+	):
 		defaults = dict(
 			lr=lr,
 			momentum=momentum,
@@ -172,7 +172,7 @@ class HybridMuonAdamW:
 		optim_cfg: OptimizerConfig,
 		train_cfg: Optional[TrainingConfig] = None,
 		lr_override: Optional[float] = None,
-	) -> None:
+	):
 		self.optim_cfg = optim_cfg
 		self.train_cfg = train_cfg
 		self.base_muon_lr = lr_override if lr_override is not None else optim_cfg.muon_lr
@@ -285,13 +285,13 @@ class HybridMuonAdamW:
 				g["lr"] = self.base_adamw_lr * mult
 		return mult
 
-	def zero_grad(self, set_to_none: bool = True) -> None:
+	def zero_grad(self, set_to_none: bool = True):
 		if self.muon is not None:
 			self.muon.zero_grad(set_to_none)
 		if self.adamw is not None:
 			self.adamw.zero_grad(set_to_none)
 
-	def step(self) -> None:
+	def step(self):
 		if self.muon is not None:
 			self.muon.step()
 		if self.adamw is not None:
@@ -303,7 +303,7 @@ class HybridMuonAdamW:
 			"adamw": self.adamw.state_dict() if self.adamw is not None else None,
 		}
 
-	def load_state_dict(self, state: Dict[str, Any]) -> None:
+	def load_state_dict(self, state: Dict[str, Any]):
 		if self.muon is not None and state.get("muon") is not None:
 			self.muon.load_state_dict(state["muon"])
 		if self.adamw is not None and state.get("adamw") is not None:

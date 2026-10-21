@@ -77,7 +77,9 @@ def _record_to_text(record: Dict[str, Any], src: DataSourceConfig) -> str:
 	if value is None and isinstance(record.get("messages"), list):
 		return _render_messages(record["messages"])
 	if isinstance(value, list):
-		return _render_messages(value) if value and isinstance(value[0], dict) else "\n".join(map(str, value))
+		return _render_messages(value) if value and isinstance(value[0], dict) \
+			else "\n".join(map(str, value))
+
 	return "" if value is None else str(value)
 
 
@@ -127,6 +129,7 @@ def _iter_hf(src: DataSourceConfig) -> Iterator[str]:
 		from datasets import load_dataset
 	except ImportError as exc:
 		raise ImportError(f"Source '{src.name}' with hf type requires: pip install datasets") from exc
+
 	ds = load_dataset(
 		src.hf_name,
 		name=src.hf_config or None,
@@ -149,7 +152,10 @@ READERS = {
 def iter_documents(src: DataSourceConfig) -> Iterator[str]:
 	reader = READERS.get(src.type.lower())
 	if reader is None:
-		raise ValueError(f"Unsupported source type '{src.type}'. Choose from: {', '.join([*READERS, 'bin'])}")
+		raise ValueError(
+			f"Unsupported source type '{src.type}'. Choose from: {', '.join([*READERS, 'bin'])}"
+		)
+
 	count = 0
 	for doc in reader(src):
 		if len(doc) < max(1, src.min_chars):
@@ -165,23 +171,25 @@ def iter_documents(src: DataSourceConfig) -> Iterator[str]:
 # --------------------------------------------------------------------------- #
 
 class _ShardWriter:
-	def __init__(self, out_dir: Path, split: str, dtype: np.dtype, shard_size: int) -> None:
+	def __init__(self, out_dir: Path, split: str, dtype: np.dtype, shard_size: int):
 		self.out_dir, self.split, self.dtype, self.shard_size = out_dir, split, dtype, shard_size
 		self.buffer: List[np.ndarray] = []
 		self.buffered = 0
 		self.shards: List[Dict[str, Any]] = []
 
-	def add(self, ids: List[int]) -> None:
+	def add(self, ids: List[int]):
 		if not ids:
 			return
+
 		self.buffer.append(np.asarray(ids, dtype=self.dtype))
 		self.buffered += len(ids)
 		if self.buffered >= self.shard_size:
 			self.flush()
 
-	def flush(self) -> None:
+	def flush(self):
 		if not self.buffered:
 			return
+
 		arr = np.concatenate(self.buffer)
 		name = f"{self.split}_{len(self.shards):05d}.bin"
 		arr.tofile(self.out_dir / name)
@@ -228,14 +236,30 @@ def load_source_meta(src: DataSourceConfig, cfg: FullConfig) -> Optional[Dict[st
 
 def _register_bin_source(src: DataSourceConfig, cfg: FullConfig) -> Dict[str, Any]:
 	"""Registers existing pre-tokenized binary files directly."""
-	dtype = select_token_dtype(cfg.model.vocab_size) if src.bin_dtype == "auto" else np.dtype(src.bin_dtype)
+	dtype = select_token_dtype(cfg.model.vocab_size) if src.bin_dtype == "auto" \
+		else np.dtype(src.bin_dtype)
+
 	files = _expand_paths(src.path)
 	if not files:
-		raise FileNotFoundError(f"Binary source '{src.name}' found no matching files at: {src.path}")
-	meta: Dict[str, Any] = {"dtype": dtype.name, "splits": {"train": [], "val": []}, "external": True}
+		raise FileNotFoundError(
+			f"Binary source '{src.name}' found no matching files at: {src.path}"
+		)
+
+	meta: Dict[str, Any] = {
+		"dtype": dtype.name,
+		"splits": {"train": [], "val": []},
+		"external": True
+	}
+
 	for f in files:
 		split = "val" if "val" in f.name.lower() else "train"
-		meta["splits"][split].append({"file": str(f), "num_tokens": f.stat().st_size // dtype.itemsize})
+		meta["splits"][split].append(
+			{
+				"file": str(f),
+				"num_tokens": f.stat().st_size // dtype.itemsize
+			}
+		)
+
 	return meta
 
 
@@ -268,7 +292,7 @@ def prepare_source(src: DataSourceConfig, cfg: FullConfig, force: bool = False) 
 	num_docs = 0
 	budget_hit = False
 
-	def _flush_batch(docs: List[str], start_idx: int) -> None:
+	def _flush_batch(docs: List[str], start_idx: int):
 		nonlocal budget_hit
 		for offset, ids in enumerate(tok.encode_batch(docs)):
 			if cfg.data.prepend_bos:
@@ -321,6 +345,14 @@ def prepare_source(src: DataSourceConfig, cfg: FullConfig, force: bool = False) 
 	return meta
 
 
-def prepare_all(cfg: FullConfig, stage: Optional[str] = None, force: bool = False) -> Dict[str, Dict[str, Any]]:
-	sources = cfg.data.active_sources(stage) if stage else [s for s in cfg.data.sources if s.enabled]
-	return {src.name: prepare_source(src, cfg, force=force) for src in sources}
+def prepare_all(
+	cfg: FullConfig,
+	stage: Optional[str] = None,
+	force: bool = False
+) -> Dict[str, Dict[str, Any]]:
+	sources = cfg.data.active_sources(stage) if stage \
+		else [s for s in cfg.data.sources if s.enabled]
+
+	return {
+		src.name: prepare_source(src, cfg, force) for src in sources
+	}

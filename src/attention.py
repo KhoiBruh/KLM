@@ -59,7 +59,7 @@ class GatedGQA(Module):
 	- Optimized with PyTorch SDPA (FlashAttention / MemEfficient kernel).
 	"""
 
-	def __init__(self, cfg: ModelConfig) -> None:
+	def __init__(self, cfg: ModelConfig):
 		super().__init__()
 		self.d_model = cfg.d_model
 		self.n_heads = cfg.n_heads
@@ -116,18 +116,14 @@ class GatedGQA(Module):
 		return self.o_proj(attn_out), None
 
 
-# Architectural alias
-BidirectionalGQA = GatedGQA
-
-
 class TransformerBlock(Module):
 	"""Bidirectional Transformer Block combining GQA + QK-Norm and SwiGLU MLP."""
 
-	def __init__(self, cfg: ModelConfig, layer_idx: int) -> None:
+	def __init__(self, cfg: ModelConfig, layer_idx: int):
 		super().__init__()
 		self.layer_idx = layer_idx
 		self.attn_norm = RMSNorm(cfg.d_model)
-		self.attn = BidirectionalGQA(cfg)
+		self.attn = GatedGQA(cfg)
 		self.ffn_norm = RMSNorm(cfg.d_model)
 		self.mlp = SwiGLUMLP(cfg.d_model, cfg.d_ff, cfg.dropout)
 
@@ -137,9 +133,7 @@ class TransformerBlock(Module):
 		rope: RotaryEmbed,
 		attention_mask: Optional[torch.Tensor] = None
 	) -> Tuple[torch.Tensor, None]:
-		attn_out, _ = self.attn(
-			self.attn_norm(x), rope=rope, attention_mask=attention_mask
-		)
+		attn_out, _ = self.attn(self.attn_norm(x), rope, attention_mask)
 		h = x + attn_out
 		out = h + self.mlp(self.ffn_norm(h))
 		return out, None

@@ -133,8 +133,10 @@ def _unwrap_model(model: Any) -> Any:
 	raw = model
 	if hasattr(raw, "_orig_mod"):
 		raw = raw._orig_mod
+
 	if hasattr(raw, "module"):
 		raw = raw.module
+
 	return raw
 
 
@@ -144,8 +146,7 @@ def save_checkpoint(
 	step: int,
 	optimizer: Optional[Any] = None,
 	extra_state: Optional[Dict[str, Any]] = None,
-	cfg: Optional[FullConfig] = None,
-	export_inference_copy: bool = False,
+	cfg: Optional[FullConfig] = None
 ) -> Path:
 	"""
 	Saves model weights in standard `.safetensors` format (zero-copy mmap).
@@ -170,6 +171,7 @@ def save_checkpoint(
 		if ptr in seen_ptrs:
 			tied_keys[key] = seen_ptrs[ptr]
 			continue
+
 		seen_ptrs[ptr] = key
 		tensors_to_save[key] = tensor.detach().cpu().contiguous()
 
@@ -186,9 +188,9 @@ def save_checkpoint(
 
 	if total_bytes <= max_shard_bytes:
 		latest_model_path = ckpt_root / "model.safetensors"
-		safetensors_save_file(tensors_to_save, str(latest_model_path), metadata=metadata)
+		safetensors_save_file(tensors_to_save, str(latest_model_path), metadata)
 		step_model_path = ckpt_root / f"step_{step:07d}.safetensors"
-		safetensors_save_file(tensors_to_save, str(step_model_path), metadata=metadata)
+		safetensors_save_file(tensors_to_save, str(step_model_path), metadata)
 		saved_primary = latest_model_path
 	else:
 		shards: List[Dict[str, torch.Tensor]] = []
@@ -208,9 +210,9 @@ def save_checkpoint(
 
 		num_shards = len(shards)
 		weight_map: Dict[str, str] = {}
-		for idx, shard_dict in enumerate(shards, start=1):
+		for idx, shard_dict in enumerate(shards, 1):
 			shard_name = f"model-{idx:05d}-of-{num_shards:05d}.safetensors"
-			safetensors_save_file(shard_dict, str(ckpt_root / shard_name), metadata=metadata)
+			safetensors_save_file(shard_dict, str(ckpt_root / shard_name), metadata)
 			for k in shard_dict:
 				weight_map[k] = shard_name
 
@@ -219,7 +221,7 @@ def save_checkpoint(
 			"metadata": {"total_size": total_bytes, **metadata},
 			"weight_map": weight_map,
 		}
-		index_path.write_text(json.dumps(index_data, indent=2), encoding="utf-8")
+		index_path.write_text(json.dumps(index_data, indent=2), "utf-8")
 		saved_primary = index_path
 
 	meta_info = {
@@ -228,7 +230,7 @@ def save_checkpoint(
 		"tied_keys": tied_keys,
 	}
 	(ckpt_root / "checkpoint_meta.json").write_text(
-		json.dumps(meta_info, indent=2, ensure_ascii=False), encoding="utf-8"
+		json.dumps(meta_info, indent=2, ensure_ascii=False), "utf-8"
 	)
 
 	if optimizer is not None or extra_state is not None:
@@ -254,9 +256,7 @@ def load_checkpoint(
 	restoring tied weights and optimizer state if available.
 	"""
 	if not HAS_SAFETENSORS:
-		raise ImportError(
-			"Package 'safetensors' is required. Install via: pip install safetensors"
-		)
+		raise ImportError("Package 'safetensors' is required. Install via: pip install safetensors")
 
 	target = Path(checkpoint_dir_or_file)
 	ckpt_dir = target.parent if target.is_file() else target
@@ -279,13 +279,13 @@ def load_checkpoint(
 
 	state_dict: Dict[str, torch.Tensor] = {}
 	if index_file is not None:
-		index_data = json.loads(index_file.read_text(encoding="utf-8"))
+		index_data = json.loads(index_file.read_text("utf-8"))
 		shard_files = sorted(set(index_data.get("weight_map", {}).values()))
 		for shard_name in shard_files:
-			shard_tensors = safetensors_load_file(str(ckpt_dir / shard_name), device=str(device))
+			shard_tensors = safetensors_load_file(str(ckpt_dir / shard_name), str(device))
 			state_dict.update(shard_tensors)
 	elif safetensor_file is not None:
-		state_dict = safetensors_load_file(str(safetensor_file), device=str(device))
+		state_dict = safetensors_load_file(str(safetensor_file), str(device))
 
 	raw_model = _unwrap_model(model)
 	if (

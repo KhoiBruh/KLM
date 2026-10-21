@@ -59,7 +59,7 @@ class RotaryEmbed(nn.Module):
 		self.register_buffer("inv_freq", inv_freq, persistent=False)
 		self._build_cache(max_seq_len)
 
-	def _build_cache(self, seq_len: int) -> None:
+	def _build_cache(self, seq_len: int):
 		self.max_seq_len = max(self.max_seq_len, seq_len)
 		t = torch.arange(self.max_seq_len, device=self.inv_freq.device, dtype=torch.float32)
 		freqs = torch.outer(t, self.inv_freq)
