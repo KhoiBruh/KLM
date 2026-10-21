@@ -1,10 +1,11 @@
 """
-Mô-đun Gated Grouped-Query Attention (GQA), KV-Cache & Khối Transformer
-=======================================================================
-Bao gồm:
-- `LayerKVCache`: Lưu trữ trạng thái K, V và ShortConv khi sinh văn bản tốc độ cao.
-- `GatedGroupedQueryAttention`: Tích hợp ShortConv + QK-Norm + RoPE + Output Gate + FlashAttention.
-- `TransformerBlock`: Khối Transformer hoàn chỉnh kết hợp Attention và SwiGLU MLP.
+Mô-đun Bidirectional Attention & Khối Transformer cho kiến trúc LLaDA
+=====================================================================
+LLaDA (Large Language Diffusion with Masking) sử dụng Transformer 2 chiều (Bidirectional):
+- Toàn bộ chuỗi chú ý lẫn nhau (is_causal = False).
+- QK-Norm (`RMSNorm` trên Q và K trước khi xoay RoPE) chống trôi/nổ gradient.
+- RoPE 1D mã hóa vị trí tuyệt đối/tương đối 2 chiều.
+- FlashAttention tối ưu hóa thông qua `F.scaled_dot_product_attention`.
 """
 
 from __future__ import annotations
@@ -19,18 +20,17 @@ from torch.nn import Module
 
 from .config_loader import ModelConfig
 from .layers import (
-    DepthwiseShortConv,
-    RMSNorm,
-    RotaryEmbed,
-    SwiGLUMLP,
-    rotary_pos_emb,
+	DepthwiseShortConv,
+	RMSNorm,
+	RotaryEmbed,
+	SwiGLUMLP,
+	rotary_pos_emb,
 )
 
 
 @dataclass
 class LayerKVCache:
-	"""Bộ nhớ đệm KV và trạng thái ShortConv cho một tầng Transformer khi sinh văn bản."""
-
+	"""Giữ lại tương thích ngược kiểu dữ liệu (không sử dụng trong sinh LLaDA)."""
 	k: torch.Tensor
 	v: torch.Tensor
 	conv_state: Optional[torch.Tensor] = None
@@ -54,11 +54,10 @@ def repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
 
 class GatedGQA(Module):
 	"""
-	Grouped-Query Attention (GQA) tích hợp:
-	- Depthwise ShortConv trước QKV
-	- QK-Norm (`RMSNorm` trên Q và K trước khi xoay RoPE)
-	- Output Gate (nhân `attn_out = attn_out * torch.sigmoid(gate)` trước `o_proj`)
-	- FlashAttention (`F.scaled_dot_product_attention`) & KV-Cache
+	Grouped-Query Attention 2 chiều (Bidirectional GQA) cho LLaDA:
+	- Hỗ trợ đầy đủ tương tác 2 chiều giữa các token đã mask và token ngữ cảnh (is_causal=False).
+	- QK-Norm (`RMSNorm` trên Q và K) bảo vệ độ ổn định khi dùng Muon/AdamW.
+	- Tích hợp PyTorch SDPA (FlashAttention / MemEfficient kernel).
 	"""
 
 	def __init__(self, cfg: ModelConfig) -> None:
@@ -71,8 +70,9 @@ class GatedGQA(Module):
 		self.q_dim = self.n_heads * self.head_dim
 		self.kv_dim = self.n_kv_heads * self.head_dim
 		self.dropout = cfg.dropout
+		self.is_causal = getattr(cfg, "is_causal", False)
 
-		self.use_short_conv = cfg.use_short_conv
+		self.use_short_conv = getattr(cfg, "use_short_conv", False)
 		if self.use_short_conv:
 			self.short_conv = DepthwiseShortConv(self.d_model, cfg.short_conv_kernel)
 
@@ -85,8 +85,8 @@ class GatedGQA(Module):
 			self.q_norm = RMSNorm(self.head_dim)
 			self.k_norm = RMSNorm(self.head_dim)
 
-		self.use_attn_output_gate = cfg.use_attn_output_gate
-		self.attn_gate_rank = cfg.attn_gate_rank
+		self.use_attn_output_gate = getattr(cfg, "use_attn_output_gate", False)
+		self.attn_gate_rank = getattr(cfg, "attn_gate_rank", 0)
 		if self.use_attn_output_gate:
 			if 0 < self.attn_gate_rank < self.d_model:
 				self.gate_down = nn.Linear(self.d_model, self.attn_gate_rank, bias=False)
@@ -108,16 +108,17 @@ class GatedGQA(Module):
 		self,
 		x: torch.Tensor,
 		rope: RotaryEmbed,
+		attention_mask: Optional[torch.Tensor] = None,
 		kv_cache: Optional[LayerKVCache] = None,
 		use_cache: bool = False,
 	) -> Tuple[torch.Tensor, Optional[LayerKVCache]]:
 		bsz, seq_len, _ = x.shape
 
-		conv_state = kv_cache.conv_state if kv_cache is not None else None
 		if self.use_short_conv:
-			x_conv, new_conv_state = self.short_conv(x, conv_state=conv_state, use_cache=use_cache)
+			conv_state = kv_cache.conv_state if kv_cache is not None else None
+			x_conv, _ = self.short_conv(x, conv_state=conv_state, use_cache=False)
 		else:
-			x_conv, new_conv_state = x, None
+			x_conv = x
 
 		q = self.q_proj(x_conv).view(bsz, seq_len, self.n_heads, self.head_dim).transpose(1, 2)
 		k = self.k_proj(x_conv).view(bsz, seq_len, self.n_kv_heads, self.head_dim).transpose(1, 2)
@@ -127,26 +128,20 @@ class GatedGQA(Module):
 			q = self.q_norm(q)
 			k = self.k_norm(k)
 
-		offset = kv_cache.seq_len if kv_cache is not None else 0
-		cos, sin = rope(q, seq_len, offset)
+		# Áp dụng RoPE 2 chiều: mỗi vị trí token trong chuỗi tương tác với toàn bộ chuỗi
+		cos, sin = rope(q, seq_len, 0)
 		q, k = rotary_pos_emb(q, k, cos, sin)
-
-		if kv_cache is not None:
-			k = torch.cat([kv_cache.k, k], 2)
-			v = torch.cat([kv_cache.v, v], 2)
-
-		new_cache: Optional[LayerKVCache] = None
-		if use_cache:
-			new_cache = LayerKVCache(k.detach(), v.detach(), new_conv_state)
 
 		k_exp = repeat_kv(k, self.n_rep)
 		v_exp = repeat_kv(v, self.n_rep)
 
-		is_causal = (kv_cache is None) and (seq_len > 1)
+		# LLaDA chú ý 2 chiều (Bidirectional): is_causal = False
+		is_causal = self.is_causal and (seq_len > 1)
 		attn_out = F.scaled_dot_product_attention(
-			q, k_exp, v_exp, None,
-			self.dropout if self.training else 0.0,
-			is_causal
+			q, k_exp, v_exp,
+			attn_mask=attention_mask,
+			dropout_p=self.dropout if self.training else 0.0,
+			is_causal=is_causal,
 		)
 
 		attn_out = attn_out.transpose(1, 2).contiguous().view(bsz, seq_len, self.q_dim)
@@ -155,11 +150,11 @@ class GatedGQA(Module):
 			gate = self._compute_gate(x)
 			attn_out = attn_out * torch.sigmoid(gate)
 
-		return self.o_proj(attn_out), new_cache
+		return self.o_proj(attn_out), None
 
 
 class TransformerBlock(Module):
-	"""Khối Transformer kết hợp Gated GQA + ShortConv + QK-Norm và SwiGLU MLP."""
+	"""Khối Transformer 2 chiều (Bidirectional Block) kết hợp GQA + QK-Norm và SwiGLU MLP."""
 
 	def __init__(self, cfg: ModelConfig, layer_idx: int) -> None:
 		super().__init__()
@@ -173,10 +168,13 @@ class TransformerBlock(Module):
 		self,
 		x: torch.Tensor,
 		rope: RotaryEmbed,
+		attention_mask: Optional[torch.Tensor] = None,
 		kv_cache: Optional[LayerKVCache] = None,
 		use_cache: bool = False,
 	) -> Tuple[torch.Tensor, Optional[LayerKVCache]]:
-		attn_out, new_cache = self.attn(self.attn_norm(x), rope, kv_cache, use_cache)
+		attn_out, _ = self.attn(
+			self.attn_norm(x), rope=rope, attention_mask=attention_mask
+		)
 		h = x + attn_out
 		out = h + self.mlp(self.ffn_norm(h))
-		return out, new_cache
+		return out, None
