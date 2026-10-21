@@ -18,7 +18,7 @@ from typing import List
 import torch
 
 from src.config_loader import load_config
-from src.model import KLMModel, count_params, load_checkpoint
+from src.model import KLMModel, count_params, has_checkpoint, load_checkpoint
 from tokenizer.build_tokenizer import Tokenizer
 
 
@@ -63,16 +63,19 @@ def generate_llada(
 	temperature: float = 0.0,
 	remask_schedule: str = "cosine",
 	stream: bool = True,
-	print_each_step: bool = False
+	print_each_step: bool = False,
+	stage: str = "sft",
 ) -> str:
 	"""
 	Generate text with the LLaDA Masked Diffusion Sampler accompanied by real-time speed monitoring.
 	"""
 	model.eval()
-	formatted_prompt = (
-		prompt_text if prompt_text.startswith("<|bos|>")
-		else f"<|bos|><|user|> {prompt_text} <|assistant|>"
-	)
+	if prompt_text.startswith("<|bos|>"):
+		formatted_prompt = prompt_text
+	elif stage == "pretrain":
+		formatted_prompt = f"<|bos|>{prompt_text}"
+	else:
+		formatted_prompt = f"<|bos|><|user|> {prompt_text} <|assistant|>"
 	prompt_ids = tokenizer.encode(formatted_prompt)
 	prompt_tensor = torch.tensor([prompt_ids], dtype=torch.long, device=device)
 	prompt_len = len(prompt_ids)
@@ -161,17 +164,23 @@ def main():
 		else "cpu"
 	)
 
-	tokenizer = Tokenizer(cfg=cfg)
+	ckpt_dir = cfg.project.checkpoint_path
+	bundled_tok = ckpt_dir / "tokenizer.json"
+	tokenizer = Tokenizer(
+		tokenizer_path=bundled_tok if bundled_tok.exists() else None,
+		cfg=cfg,
+	)
 	model = KLMModel(cfg).to(device)
 
-	ckpt_dir = cfg.project.checkpoint_path
-	if (
-		(ckpt_dir / "model.safetensors").exists() or
-		(ckpt_dir / "model.safetensors.index.json").exists()
-	):
+	ckpt_stage = cfg.training.stage.lower()
+	if has_checkpoint(ckpt_dir):
 		try:
 			info = load_checkpoint(model, ckpt_dir, device)
-			print(f"[Inference] Loaded Safetensors weights from '{info['loaded_from']}' (step={info['step']}).")
+			ckpt_stage = str(info.get("stage", ckpt_stage)).lower()
+			print(
+				f"[Inference] Loaded Safetensors weights from '{info['loaded_from']}' "
+				f"(step={info['step']}, stage={ckpt_stage})."
+			)
 		except Exception as exc:
 			print(f"[Inference] Warning when loading checkpoint ({exc}), running with random weights.")
 	else:
@@ -195,6 +204,7 @@ def main():
 			model, tokenizer, prompt_str, device,
 			args.gen_length, args.steps, args.temperature, args.schedule,
 			stream=stream_enabled, print_each_step=args.show_steps,
+			stage=ckpt_stage,
 		)
 		return
 
@@ -218,7 +228,8 @@ def main():
 		generate_llada(
 			model, tokenizer, user_in, device,
 			args.gen_length, args.steps, args.temperature, args.schedule,
-			stream_enabled, args.show_steps
+			stream_enabled, args.show_steps,
+			stage=ckpt_stage,
 		)
 
 

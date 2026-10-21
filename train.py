@@ -27,6 +27,7 @@ from src.dataset import MemmapTokenDataset
 from src.model import (
 	KLMModel,
 	count_params,
+	has_checkpoint,
 	load_checkpoint,
 	save_checkpoint,
 )
@@ -238,14 +239,29 @@ def train(
 	# Restore from existing safetensors checkpoint if available
 	ckpt_dir = cfg.project.checkpoint_path
 	start_step = 0
-	if (
-		(ckpt_dir / "model.safetensors").exists() or
-		(ckpt_dir / "model.safetensors.index.json").exists()
-	):
+	if has_checkpoint(ckpt_dir):
 		try:
 			resume_info = load_checkpoint(base_model, ckpt_dir, device, optimizer)
-			start_step = int(resume_info.get("step", 0))
-			print(f"[Checkpoint] Restored weights from '{resume_info['loaded_from']}' (step={start_step}).")
+			prev_stage = str(
+				resume_info.get("extra_state", {}).get("stage")
+				or resume_info.get("stage", stage)
+			).lower()
+			if prev_stage == stage:
+				start_step = int(resume_info.get("step", 0))
+				if start_step >= (cfg.rl_grpo.steps if stage == "grpo" else cfg.training.total_steps):
+					start_step = 0
+				print(
+					f"[Checkpoint] Restored '{stage}' weights & state from '{resume_info['loaded_from']}' "
+					f"(step={start_step})."
+				)
+			else:
+				# New stage (e.g. pretrain -> sft): keep pretrained model weights, reset optimizer & step counter
+				optimizer = build_optimizer(base_model, cfg=cfg, lr_override=lr_override)
+				start_step = 0
+				print(
+					f"[Checkpoint] Loaded '{prev_stage}' backbone weights from '{resume_info['loaded_from']}' "
+					f"-> starting '{stage}' stage at step=0."
+				)
 		except Exception as exc:
 			print(f"[Checkpoint] Initializing fresh weights (skipped checkpoint: {exc}).")
 

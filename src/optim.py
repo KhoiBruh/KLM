@@ -269,10 +269,11 @@ class HybridMuonAdamW:
 		if self.train_cfg is not None:
 			max_steps = total_steps if total_steps is not None else self.train_cfg.total_steps
 			mult = get_wsd_lr_multiplier(
-				step, max_steps,
-				self.train_cfg.warmup_ratio,
-				self.train_cfg.stable_ratio,
-				self.train_cfg.decay_ratio,
+				step,
+				max_steps,
+				warmup_ratio=self.train_cfg.warmup_ratio,
+				stable_ratio=self.train_cfg.stable_ratio,
+				min_lr_ratio=0.05,
 			)
 		else:
 			mult = 1.0

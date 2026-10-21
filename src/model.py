@@ -28,6 +28,7 @@ from .checkpoint import (
 	_unwrap_model,
 	count_params,
 	est_config_params,
+	has_checkpoint,
 	load_checkpoint,
 	save_checkpoint,
 )
@@ -155,17 +156,21 @@ class KLMModel(nn.Module):
 		if mask_indices is None:
 			mask_indices = input_ids == self.mask_token_id
 
-		# Compute Masked Cross-Entropy Loss solely over masked positions
-		num_masked = mask_indices.sum()
+		# Compute LLaDA ELBO Masked Cross-Entropy Loss (weighted by 1 / r_b per sequence)
+		valid_mask = mask_indices & (targets != ignore_index)
+		num_masked = valid_mask.sum()
 		if num_masked > 0:
-			masked_targets = targets.clone()
-			masked_targets[~mask_indices] = ignore_index
-
-			loss = F.cross_entropy(
+			token_losses = F.cross_entropy(
 				logits.view(-1, self.vocab_size).float(),
-				masked_targets.view(-1),
+				targets.view(-1),
 				ignore_index=ignore_index,
-			)
+				reduction="none",
+			).view_as(targets)
+			masked_losses = token_losses * valid_mask.float()
+			per_seq_counts = valid_mask.sum(dim=-1).clamp(min=1).float()
+			per_seq_loss = masked_losses.sum(dim=-1) / per_seq_counts
+			active_seqs = (valid_mask.sum(dim=-1) > 0).float()
+			loss = (per_seq_loss * active_seqs).sum() / active_seqs.sum().clamp(min=1.0)
 		else:
 			loss = F.cross_entropy(
 				logits.view(-1, self.vocab_size).float(),
@@ -189,15 +194,18 @@ class KLMModel(nn.Module):
 		steps: Optional[int] = None,
 		temperature: float = 0.0,
 		remask_schedule: str = "cosine",
+		block_length: int = 16,
+		repetition_penalty: float = 1.25,
 		step_callback: Optional[Callable[[int, int, torch.Tensor], None]] = None,
 	) -> torch.Tensor:
 		"""
-		LLaDA Diffusion Sampler (Confidence-based Masked Diffusion Decoding).
-		- Supports prompt continuation (infilling / completion) as well as unconditional generation.
-		- Simultaneously predicts all positions, unmasking confident tokens and remasking low-confidence tokens.
+		LLaDA Semi-Autoregressive Block Diffusion Sampler (Confidence-based Masked Decoding).
+		- Divides `gen_length` into semi-autoregressive blocks (`block_length`) to prevent
+		  long-range unigram mode collapse (e.g. all `\n` tokens).
+		- Applies sliding-window repetition penalty and adjacent duplicate suppression.
 		"""
 		self.eval()
-		total_steps = steps or self.sampling_steps
+		total_steps = max(1, steps or self.sampling_steps)
 		device = next(self.parameters()).device
 
 		# Standardize prompt input
@@ -211,71 +219,103 @@ class KLMModel(nn.Module):
 		bsz, prompt_len = prompt.shape
 		total_len = prompt_len + gen_length
 
-		# Initialize sequence x: preserve prompt tokens, fill remainder with MASK tokens
+		# Initialize full sequence x: preserve prompt tokens, fill remainder with MASK tokens
 		x = torch.full((bsz, total_len), self.mask_token_id, dtype=torch.long, device=device)
 		if prompt_len > 0:
 			x[:, :prompt_len] = prompt
 
-		# Mark fixed prompt positions (never remask prompt tokens)
-		is_prompt = torch.zeros((bsz, total_len), dtype=torch.bool, device=device)
-		if prompt_len > 0:
-			is_prompt[:, :prompt_len] = True
+		eff_block_len = max(1, min(block_length, gen_length))
+		num_blocks = math.ceil(gen_length / eff_block_len)
+		steps_per_block = max(1, math.ceil(total_steps / num_blocks))
+		global_step = 0
+		effective_total_steps = num_blocks * steps_per_block
 
-		# Diffusion denoising iterations
-		for s in range(total_steps):
-			out = self(input_ids=x)
-			logits = out.logits.clone()  # (B, L, V)
+		for b_idx in range(num_blocks):
+			b_start = prompt_len + b_idx * eff_block_len
+			b_end = min(total_len, b_start + eff_block_len)
+			cur_block_len = b_end - b_start
 
-			# Disallow predicting MASK token directly
-			logits[:, :, self.mask_token_id] = -float("inf")
+			for s in range(steps_per_block):
+				global_step += 1
+				# Run bidirectional forward pass up to the end of the current active block
+				out = self(input_ids=x[:, :b_end])
+				logits = out.logits[:, b_start:b_end, :].clone()  # (B, cur_block_len, V)
 
-			# Calculate token probabilities and confidence values
-			if temperature <= 1e-5:
-				pred_tokens = torch.argmax(logits, dim=-1)
-				probs = F.softmax(logits, dim=-1)
-				confidence = torch.max(probs, dim=-1).values
-			else:
-				scaled_logits = logits / max(1e-4, temperature)
-				probs = F.softmax(scaled_logits, dim=-1)
-				flat_probs = probs.view(-1, self.vocab_size)
-				pred_tokens = torch.multinomial(flat_probs, num_samples=1).view(bsz, total_len)
-				confidence = probs.gather(-1, pred_tokens.unsqueeze(-1)).squeeze(-1)
+				# Disallow predicting control tokens (<|pad|>=0, <|bos|>=1, <|unk|>=3, <|mask|>=4)
+				for banned_id in (0, 1, 3, self.mask_token_id):
+					if 0 <= banned_id < self.vocab_size:
+						logits[:, :, banned_id] = -float("inf")
 
-			# Update current mask positions with predicted tokens
-			mask_pos = (x == self.mask_token_id)
-			x = torch.where(mask_pos, pred_tokens, x)
+				# Prevent immediate leading newline collapse at the start of generation
+				if b_idx == 0 and cur_block_len > 0 and 208 < self.vocab_size:
+					logits[:, 0, 208] -= 5.0
 
-			# Final step termination: sequence is completely unmasked
-			if s == total_steps - 1:
+				# Apply sliding-window repetition penalty & adjacent duplicate suppression
+				if repetition_penalty > 1.0:
+					for b in range(bsz):
+						win_start = max(0, b_start - 32)
+						window_tokens = [
+							int(t) for t in x[b, win_start:b_end].tolist()
+							if int(t) != self.mask_token_id
+						]
+						if window_tokens:
+							counts: dict[int, int] = {}
+							for tid in window_tokens:
+								counts[tid] = counts.get(tid, 0) + 1
+							for tid, cnt in counts.items():
+								pen = repetition_penalty ** min(cnt, 4)
+								val = logits[b, :, tid]
+								logits[b, :, tid] = torch.where(val > 0, val / pen, val * pen)
+
+						for pos in range(cur_block_len):
+							abs_pos = b_start + pos
+							if abs_pos > 0:
+								prev_tok = int(x[b, abs_pos - 1].item())
+								if prev_tok != self.mask_token_id:
+									logits[b, pos, prev_tok] -= 3.5
+
+				# Calculate token probabilities and confidence values
+				if temperature <= 1e-5:
+					pred_tokens = torch.argmax(logits, dim=-1)
+					probs = F.softmax(logits, dim=-1)
+					confidence = torch.max(probs, dim=-1).values
+				else:
+					scaled_logits = logits / max(1e-4, temperature)
+					probs = F.softmax(scaled_logits, dim=-1)
+					flat_probs = probs.view(-1, self.vocab_size)
+					pred_tokens = torch.multinomial(flat_probs, num_samples=1).view(bsz, cur_block_len)
+					confidence = probs.gather(-1, pred_tokens.unsqueeze(-1)).squeeze(-1)
+
+				# Update current block mask positions with predicted tokens
+				block_slice = x[:, b_start:b_end]
+				mask_pos = (block_slice == self.mask_token_id)
+				x[:, b_start:b_end] = torch.where(mask_pos, pred_tokens, block_slice)
+
+				if s == steps_per_block - 1:
+					if step_callback is not None:
+						step_callback(min(global_step, effective_total_steps), effective_total_steps, x.detach())
+					break
+
+				# Compute target mask ratio within current block for next step
+				progress = (s + 1) / steps_per_block
+				unmask_target = max(1, math.ceil(progress * cur_block_len))
+				if remask_schedule == "cosine":
+					mask_ratio = math.cos(progress * (math.pi / 2.0))
+				else:
+					mask_ratio = 1.0 - progress
+
+				num_to_mask = max(
+					0,
+					min(cur_block_len - unmask_target, int(round(mask_ratio * cur_block_len)))
+				)
+
+				if num_to_mask > 0:
+					for b in range(bsz):
+						_, low_conf_indices = torch.topk(confidence[b], k=num_to_mask, largest=False)
+						x[b, b_start + low_conf_indices] = self.mask_token_id
+
 				if step_callback is not None:
-					step_callback(s + 1, total_steps, x.detach())
-				break
-
-			# Compute target mask ratio for next step
-			progress = (s + 1) / total_steps
-			unmask_target = max(1, math.ceil(progress * gen_length))
-			if remask_schedule == "cosine":
-				mask_ratio = math.cos(progress * (math.pi / 2.0))
-			else:  # "linear"
-				mask_ratio = 1.0 - progress
-
-			num_to_mask = max(0, min(gen_length - unmask_target, int(round(mask_ratio * gen_length))))
-
-			# Prompt tokens have infinite confidence to prevent remasking
-			eff_confidence = confidence.clone()
-			eff_confidence[is_prompt] = float("inf")
-
-			# Remask lowest-confidence generated tokens
-			if num_to_mask > 0:
-				for b in range(bsz):
-					gen_confs = eff_confidence[b, prompt_len:]
-					if len(gen_confs) > 0:
-						actual_to_mask = min(num_to_mask, len(gen_confs))
-						_, low_conf_indices = torch.topk(gen_confs, k=actual_to_mask, largest=False)
-						x[b, prompt_len + low_conf_indices] = self.mask_token_id
-
-			if step_callback is not None:
-				step_callback(s + 1, total_steps, x.detach())
+					step_callback(min(global_step, effective_total_steps), effective_total_steps, x.detach())
 
 		return x
 

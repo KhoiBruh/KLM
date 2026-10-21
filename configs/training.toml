@@ -17,14 +17,14 @@ stage = "pretrain"            # Mode: "pretrain", "sft"
 micro_batch_size = 64         # Optimized for RTX 3050 4GB (~2.6GB VRAM)
 grad_accum_steps = 8          # Global batch = 64 * 8 = 512 sequences
 total_steps = 100000
-warmup_ratio = 0.03           # WSD schedule: 3% Warmup -> 82% Stable -> 15% Decay
-stable_ratio = 0.82
-decay_ratio = 0.15
+warmup_ratio = 0.05           # WSD schedule: 5% Warmup -> 45% Stable -> 50% Cosine Decay
+stable_ratio = 0.45
+decay_ratio = 0.50
 
 # Masked Diffusion configuration
 mask_ratio_min = 0.15         # Minimum masking ratio during training
-mask_ratio_max = 1.0          # Maximum masking ratio during training
-noise_schedule = "uniform"    # Noise schedule: "uniform" or "cosine"
+mask_ratio_max = 0.85         # Maximum masking ratio (preserves >=15% context tokens)
+noise_schedule = "cosine"     # Noise schedule: "uniform" or "cosine"
 
 gradient_checkpointing = true # Reduces VRAM footprint
 distributed_strategy = "auto" # "auto", "none", "ddp", "fsdp"

@@ -20,6 +20,7 @@ from src.checkpoint import (
 	HAS_TORCH,
 	count_params,
 	est_config_params,
+	has_checkpoint,
 	load_checkpoint,
 	save_checkpoint,
 )
@@ -180,7 +181,7 @@ def main():
 	model = KLMModel(cfg).to(device)
 	ckpt_dir = cfg.project.checkpoint_path
 
-	if (ckpt_dir / "model.safetensors").exists() or (ckpt_dir / "model.safetensors.index.json").exists():
+	if has_checkpoint(ckpt_dir):
 		try:
 			info = load_checkpoint(model, ckpt_dir, device)
 			print(f"[Evaluate] Loaded weights from '{info['loaded_from']}' (step={info['step']}).")

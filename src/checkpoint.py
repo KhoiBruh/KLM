@@ -140,13 +140,28 @@ def _unwrap_model(model: Any) -> Any:
 	return raw
 
 
+def has_checkpoint(checkpoint_dir_or_file: Union[str, Path]) -> bool:
+	"""Returns True if any `.safetensors` checkpoint or index file exists at the path."""
+	target = Path(checkpoint_dir_or_file)
+	if target.is_file():
+		return target.suffix == ".safetensors" or target.name.endswith(".index.json")
+	if not target.exists():
+		return False
+	return (
+		(target / "model.safetensors").exists()
+		or (target / "model.safetensors.index.json").exists()
+		or any(target.glob("*.safetensors"))
+	)
+
+
 def save_checkpoint(
 	model: Any,
 	checkpoint_dir: Union[str, Path],
 	step: int,
 	optimizer: Optional[Any] = None,
 	extra_state: Optional[Dict[str, Any]] = None,
-	cfg: Optional[FullConfig] = None
+	cfg: Optional[FullConfig] = None,
+	export_inference_copy: bool = False,
 ) -> Path:
 	"""
 	Saves model weights in standard `.safetensors` format (zero-copy mmap).
@@ -175,9 +190,14 @@ def save_checkpoint(
 		seen_ptrs[ptr] = key
 		tensors_to_save[key] = tensor.detach().cpu().contiguous()
 
+	stage_name = (
+		(extra_state or {}).get("stage")
+		or (cfg.training.stage if cfg is not None else "pretrain")
+	)
 	metadata = {
 		"format": "pt",
 		"step": str(step),
+		"stage": str(stage_name),
 		"tie_word_embeddings": str(raw_model.cfg.tie_word_embeddings),
 		"tied_keys_json": json.dumps(tied_keys),
 		"scale_preset": raw_model.cfg.scale_preset,
@@ -185,6 +205,11 @@ def save_checkpoint(
 
 	max_shard_bytes = int((cfg.project.max_shard_size_gb if cfg else 4.0) * (1024 ** 3))
 	total_bytes = sum(t.numel() * t.element_size() for t in tensors_to_save.values())
+
+	if export_inference_copy:
+		inf_path = ckpt_root / "model_inference.safetensors"
+		safetensors_save_file(tensors_to_save, str(inf_path), metadata)
+		return inf_path
 
 	if total_bytes <= max_shard_bytes:
 		latest_model_path = ckpt_root / "model.safetensors"
@@ -226,12 +251,21 @@ def save_checkpoint(
 
 	meta_info = {
 		"step": step,
+		"stage": stage_name,
 		"model_config": raw_model.cfg.__dict__,
 		"tied_keys": tied_keys,
 	}
 	(ckpt_root / "checkpoint_meta.json").write_text(
 		json.dumps(meta_info, indent=2, ensure_ascii=False), "utf-8"
 	)
+
+	# Bundle a copy of tokenizer.json inside checkpoint_dir so portable checkpoints never mismatch vocab
+	if cfg is not None:
+		src_tok = cfg.project.tokenizer_path / "tokenizer.json"
+		dst_tok = ckpt_root / "tokenizer.json"
+		if src_tok.exists() and src_tok.resolve() != dst_tok.resolve():
+			import shutil
+			shutil.copy2(src_tok, dst_tok)
 
 	if optimizer is not None or extra_state is not None:
 		trainer_state = {
@@ -300,6 +334,7 @@ def load_checkpoint(
 
 	info: Dict[str, Any] = {
 		"step": 0,
+		"stage": "pretrain",
 		"missing_keys": missing,
 		"unexpected_keys": unexpected,
 		"loaded_from": str(index_file or safetensor_file),
@@ -310,6 +345,7 @@ def load_checkpoint(
 		try:
 			meta = json.loads(meta_path.read_text(encoding="utf-8"))
 			info["step"] = int(meta.get("step", 0))
+			info["stage"] = str(meta.get("stage", "pretrain")).lower()
 		except Exception:
 			pass
 
