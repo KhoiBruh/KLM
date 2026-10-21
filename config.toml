@@ -5,7 +5,7 @@
 # Cấu hình chi tiết được tách thành 4 tệp chuyên biệt trong thư mục `configs/`:
 #   1. configs/project.toml  : Thiết bị (CUDA/CPU), kiểu dữ liệu, Safetensors & đường dẫn
 #   2. configs/model.toml    : Kiến trúc mô hình & các preset mở rộng (10M -> 7B+)
-#   3. configs/training.toml : Bộ tối ưu Muon+AdamW, lịch WSD, TST & RL GRPO
+#   3. configs/training.toml : Bộ tối ưu Muon+AdamW, lịch WSD, Masked Diffusion & RL GRPO
 #   4. configs/datasets.toml : Khai báo các nguồn dữ liệu [[data.sources]] & tỷ lệ trộn
 #
 # MẸO: Bất kỳ khóa nào bạn khai báo thêm ở bên dưới tệp này sẽ tự động GHI ĐÈ (override)

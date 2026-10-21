@@ -200,9 +200,6 @@ class TrainingConfig:
 	mask_ratio_max: float = 1.0
 	noise_schedule: str = "uniform"
 
-	use_tst: bool = False
-	tst_ratio: float = 0.0
-	tst_pool_factor: int = 1
 	gradient_checkpointing: bool = True
 	distributed_strategy: str = "auto"
 	low_cpu_mem_usage: bool = False

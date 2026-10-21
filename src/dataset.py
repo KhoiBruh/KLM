@@ -1,11 +1,10 @@
 """
-Bộ nạp dữ liệu tốc độ cao (Memory-Mapped Binary Dataset & Token Superposition Training)
-======================================================================================
+Bộ nạp dữ liệu tốc độ cao (Memory-Mapped Binary Dataset cho LLaDA Diffusion)
+============================================================================
 - Sử dụng `np.memmap` định dạng `uint16` (hoặc `uint32` khi vocab > 65535 cho mô hình nhiều tỷ tham số)
   giúp nạp dữ liệu với tốc độ tối đa và tốn ~0MB RAM phụ trội.
 - Tự động sinh dữ liệu giả lập (Synthetic Arithmetic, Logic & Reasoning Corpus) nếu chưa có
   tệp `.bin` thực tế để người dùng chạy thử `python train.py` ngay lập tức.
-- Hỗ trợ cơ chế Token Superposition Training (TST) ở giai đoạn đầu Pre-train và chế độ SFT có mask.
 """
 
 from __future__ import annotations
@@ -110,24 +109,6 @@ def generate_synthetic_corpus_bin(
 	mmap.flush()
 	del mmap
 	return bin_path
-
-
-def get_tst_pool_factor(step: int, cfg: FullConfig) -> int:
-	"""
-	Xác định hệ số gộp Token Superposition Training (TST) theo bước huấn luyện hiện tại:
-	- Trong `tst_ratio` (30%) số bước đầu của giai đoạn `pretrain` khi `use_tst=True`,
-	  trả về `tst_pool_factor` (ví dụ 4).
-	- Sau ngưỡng đó hoặc ở giai đoạn `sft`/`grpo`, trả về 1 (chiều dài chuẩn).
-	"""
-	if (
-		cfg.training.stage.lower() == "pretrain"
-		and cfg.training.use_tst
-		and cfg.training.tst_pool_factor > 1
-	):
-		tst_end_step = int(cfg.training.total_steps * cfg.training.tst_ratio)
-		if step < tst_end_step:
-			return int(cfg.training.tst_pool_factor)
-	return 1
 
 
 class MemmapTokenDataset(Dataset):

@@ -26,11 +26,6 @@ mask_ratio_min = 0.15         # Tỷ lệ mask nhỏ nhất lúc train
 mask_ratio_max = 1.0          # Tỷ lệ mask lớn nhất lúc train
 noise_schedule = "uniform"    # "uniform" hoặc "cosine"
 
-# Cắt gọt: Vô hiệu hóa TST cho Masked Diffusion
-use_tst = false
-tst_ratio = 0.0
-tst_pool_factor = 1
-
 gradient_checkpointing = true # Tiết kiệm VRAM
 distributed_strategy = "auto"
 low_cpu_mem_usage = false
