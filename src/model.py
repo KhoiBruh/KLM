@@ -125,8 +125,7 @@ class KLMModel(nn.Module):
 		targets: Optional[torch.Tensor] = None,
 		mask_indices: Optional[torch.Tensor] = None,
 		attention_mask: Optional[torch.Tensor] = None,
-		ignore_index: int = -100,
-		**kwargs,
+		ignore_index: int = -100
 	) -> ModelOutput:
 		"""
 		Forward 2 chiều (Bidirectional) qua mạng LLaDA.
@@ -189,9 +188,7 @@ class KLMModel(nn.Module):
 		gen_length: int = 128,
 		steps: Optional[int] = None,
 		temperature: float = 0.0,
-		remask_schedule: str = "cosine",
-		eos_token_id: Optional[int] = None,
-		**kwargs,
+		remask_schedule: str = "cosine"
 	) -> torch.Tensor:
 		"""
 		Thuật toán giải mã khuếch tán LLaDA (Confidence-based Masked Diffusion Sampler).

@@ -134,8 +134,7 @@ def get_wsd_lr_multiplier(
 	total_steps: int,
 	warmup_ratio: float = 0.03,
 	stable_ratio: float = 0.82,
-	decay_ratio: float = 0.15,
-	min_lr_ratio: float = 0.05,
+	min_lr_ratio: float = 0.05
 ) -> float:
 	"""
 	Lịch trình tốc độ học WSD (Warmup - Stable - Decay):

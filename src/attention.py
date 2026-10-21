@@ -85,8 +85,7 @@ class GatedGQA(Module):
 		self,
 		x: torch.Tensor,
 		rope: RotaryEmbed,
-		attention_mask: Optional[torch.Tensor] = None,
-		**kwargs,
+		attention_mask: Optional[torch.Tensor] = None
 	) -> Tuple[torch.Tensor, None]:
 		bsz, seq_len, _ = x.shape
 
@@ -136,8 +135,7 @@ class TransformerBlock(Module):
 		self,
 		x: torch.Tensor,
 		rope: RotaryEmbed,
-		attention_mask: Optional[torch.Tensor] = None,
-		**kwargs,
+		attention_mask: Optional[torch.Tensor] = None
 	) -> Tuple[torch.Tensor, None]:
 		attn_out, _ = self.attn(
 			self.attn_norm(x), rope=rope, attention_mask=attention_mask
