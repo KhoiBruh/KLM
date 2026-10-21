@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import List, Optional, Union
+from typing import Callable, List, Optional, Union
 
 import torch
 import torch.nn as nn
@@ -188,7 +188,8 @@ class KLMModel(nn.Module):
 		gen_length: int = 128,
 		steps: Optional[int] = None,
 		temperature: float = 0.0,
-		remask_schedule: str = "cosine"
+		remask_schedule: str = "cosine",
+		step_callback: Optional[Callable[[int, int, torch.Tensor], None]] = None,
 	) -> torch.Tensor:
 		"""
 		Thuật toán giải mã khuếch tán LLaDA (Confidence-based Masked Diffusion Sampler).
@@ -224,7 +225,10 @@ class KLMModel(nn.Module):
 		# Vòng lặp khử nhiễu khuếch tán (Diffusion Denoising Steps)
 		for s in range(total_steps):
 			out = self(input_ids=x)
-			logits = out.logits  # (B, L, V)
+			logits = out.logits.clone()  # (B, L, V)
+
+			# Cấm mô hình dự đoán ra chính token MASK
+			logits[:, :, self.mask_token_id] = -float("inf")
 
 			# Tính xác suất và lấy mẫu token dự đoán
 			if temperature <= 1e-5:
@@ -244,16 +248,19 @@ class KLMModel(nn.Module):
 
 			# Nếu là bước cuối cùng, dừng lại (tất cả token đã được điền)
 			if s == total_steps - 1:
+				if step_callback is not None:
+					step_callback(s + 1, total_steps, x.detach())
 				break
 
-			# Tính tỷ lệ mask cần giữ lại cho bước tiếp theo theo schedule
+			# Đảm bảo tiến trình unmasking tăng đều qua từng bước
 			progress = (s + 1) / total_steps
+			unmask_target = max(1, math.ceil(progress * gen_length))
 			if remask_schedule == "cosine":
 				mask_ratio = math.cos(progress * (math.pi / 2.0))
 			else:  # "linear"
 				mask_ratio = 1.0 - progress
 
-			num_to_mask = max(1, int(round(mask_ratio * gen_length)))
+			num_to_mask = max(0, min(gen_length - unmask_target, int(round(mask_ratio * gen_length))))
 
 			# Độ tự tin ở vùng prompt được đặt vô cực để không bao giờ bị re-mask
 			eff_confidence = confidence.clone()
@@ -261,12 +268,16 @@ class KLMModel(nn.Module):
 
 			# Re-mask lại num_to_mask token có độ tự tin thấp nhất trong vùng sinh
 			# Để đảm bảo token có độ tự tin thấp nhất sẽ được mô hình xem xét lại ở bước sau
-			for b in range(bsz):
-				gen_confs = eff_confidence[b, prompt_len:]
-				if len(gen_confs) > 0:
-					actual_to_mask = min(num_to_mask, len(gen_confs))
-					_, low_conf_indices = torch.topk(gen_confs, k=actual_to_mask, largest=False)
-					x[b, prompt_len + low_conf_indices] = self.mask_token_id
+			if num_to_mask > 0:
+				for b in range(bsz):
+					gen_confs = eff_confidence[b, prompt_len:]
+					if len(gen_confs) > 0:
+						actual_to_mask = min(num_to_mask, len(gen_confs))
+						_, low_conf_indices = torch.topk(gen_confs, k=actual_to_mask, largest=False)
+						x[b, prompt_len + low_conf_indices] = self.mask_token_id
+
+			if step_callback is not None:
+				step_callback(s + 1, total_steps, x.detach())
 
 		return x
 
