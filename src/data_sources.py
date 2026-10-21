@@ -59,28 +59,54 @@ class _SafeDict(dict):
 		return ""
 
 
+def _normalize_reasoning_tags(text: str) -> str:
+	"""Normalizes modern CoT tags (<think>...</think>, etc.) into KLM special tokens."""
+	if not text:
+		return ""
+	text = text.replace("<|begin_of_thought|>", "<|think|>").replace("<think>", "<|think|>")
+	text = text.replace("<|end_of_solution|>", "")
+	if "<|begin_of_solution|>" in text:
+		text = text.replace("<|end_of_thought|>", "<|/think|>").replace("</think>", "<|/think|>")
+		text = text.replace("<|begin_of_solution|>", "<|answer|>")
+	else:
+		text = text.replace("<|end_of_thought|>", "<|/think|> <|answer|>").replace(
+			"</think>", "<|/think|> <|answer|>"
+		)
+	return text
+
+
 def _render_messages(messages: List[Dict[str, Any]]) -> str:
-	"""Formats OpenAI-style `messages=[{role, content}]` into chat special tokens."""
+	"""
+	Formats OpenAI-style `messages=[{role, content}]` or ShareGPT/OpenThoughts-style
+	`conversations=[{from, value}]` into KLM chat & reasoning special tokens.
+	"""
 	parts: List[str] = []
 	for m in messages:
-		role = str(m.get("role", "user")).lower()
-		content = str(m.get("content", ""))
-		tag = "<|assistant|>" if role == "assistant" else "<|user|>"
+		raw_role = str(m.get("role") or m.get("from") or "user").strip().lower()
+		raw_content = m.get("content") if m.get("content") is not None else m.get("value", "")
+		content = _normalize_reasoning_tags(str(raw_content).strip())
+		if not content:
+			continue
+		is_assistant = raw_role in ("assistant", "gpt", "bot", "model")
+		tag = "<|assistant|>" if is_assistant else "<|user|>"
 		parts.append(f"{tag} {content}")
 	return " ".join(parts)
 
 
 def _record_to_text(record: Dict[str, Any], src: DataSourceConfig) -> str:
 	if src.template:
-		return src.template.format_map(_SafeDict(record))
+		return _normalize_reasoning_tags(src.template.format_map(_SafeDict(record)))
 	value = record.get(src.text_field)
-	if value is None and isinstance(record.get("messages"), list):
-		return _render_messages(record["messages"])
+	if value is None:
+		if isinstance(record.get("messages"), list):
+			return _render_messages(record["messages"])
+		if isinstance(record.get("conversations"), list):
+			return _render_messages(record["conversations"])
 	if isinstance(value, list):
 		return _render_messages(value) if value and isinstance(value[0], dict) \
-			else "\n".join(map(str, value))
+			else _normalize_reasoning_tags("\n".join(map(str, value)))
 
-	return "" if value is None else str(value)
+	return "" if value is None else _normalize_reasoning_tags(str(value))
 
 
 def _open_text(path: Path):
@@ -124,11 +150,54 @@ def _iter_parquet(src: DataSourceConfig) -> Iterator[str]:
 				yield _record_to_text(record, src)
 
 
+def _iter_hf_http_fallback(src: DataSourceConfig) -> Iterator[str]:
+	"""Zero-dependency fallback streaming rows via Hugging Face Datasets Server API."""
+	import urllib.parse
+	import urllib.request
+
+	config_name = src.hf_config or "default"
+	split_name = src.hf_split or "train"
+	offset = 0
+	page_size = 100
+
+	while True:
+		params = urllib.parse.urlencode(
+			{
+				"dataset": src.hf_name,
+				"config": config_name,
+				"split": split_name,
+				"offset": offset,
+				"length": page_size,
+			}
+		)
+		url = f"https://datasets-server.huggingface.co/rows?{params}"
+		req = urllib.request.Request(url, headers={"User-Agent": "KLM-DataPipeline/1.0"})
+		try:
+			with urllib.request.urlopen(req, timeout=30) as resp:
+				payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+		except Exception:
+			break
+
+		rows = payload.get("rows", [])
+		if not rows:
+			break
+
+		for item in rows:
+			record = item.get("row", item)
+			if isinstance(record, dict):
+				yield _record_to_text(record, src)
+
+		if len(rows) < page_size:
+			break
+		offset += len(rows)
+
+
 def _iter_hf(src: DataSourceConfig) -> Iterator[str]:
 	try:
 		from datasets import load_dataset
-	except ImportError as exc:
-		raise ImportError(f"Source '{src.name}' with hf type requires: pip install datasets") from exc
+	except ImportError:
+		yield from _iter_hf_http_fallback(src)
+		return
 
 	ds = load_dataset(
 		src.hf_name,

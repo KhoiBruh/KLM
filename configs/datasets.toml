@@ -1,98 +1,141 @@
 # =============================================================================
 # 4. DATASET & MULTI-SOURCE BLENDING CONFIGURATION (configs/datasets.toml)
 # =============================================================================
-# Each data source is declared as a [[data.sources]] block.
-# - If no sources are enabled for current stage -> fallback to synthetic reasoning data.
-# - Raw corpora are tokenized once into binary shards (.bin) inside `cache_dir`
-#   (automatically regenerated if source configuration or tokenizer changes).
-# - Pre-tokenize ahead of time using: python prepare_data.py
+# Modern English-Only Post-GPT-4 Dataset Mix (2025-2026 Frontier Recipe)
+# - Pretrain (~225M tokens): FineWeb-Edu + FineMath-4plus + Cosmopedia-v2 + OpenCoder
+# - SFT (~75M tokens)      : OpenThoughts3-1.2M + OpenR1-Math-220k + SmolTalk
+#
+# Usage:
+#   1. Build custom BPE tokenizer from active datasets:
+#      python tokenizer/build_tokenizer.py
+#   2. Pre-tokenize datasets into binary .bin shards:
+#      python prepare_data.py
 # =============================================================================
 
 [data]
 cache_dir = "data/cache"
-shard_size_tokens = 100_000_000   # ~200MB/shard (uint16)
+shard_size_tokens = 50_000_000    # ~100MB/shard (uint16) - optimal for 100M-300M budget
 val_ratio = 0.005                 # 0.5% documents reserved for validation
 append_eos = true                 # Append <|eos|> between documents
-prepend_bos = false
+prepend_bos = true                # Prepend <|bos|> at document start
 tokenize_batch_size = 1024        # Batch size for multithreaded Rust tokenizer
 synthetic_fallback = true         # Generate synthetic math/reasoning data if no sources exist
 
-# -----------------------------------------------------------------------------
-# FIELD GUIDE FOR [[data.sources]]:
-# - name          : Unique identifier (used for cache folder & [[data.phases]])
-# - type          : "text" | "jsonl" | "parquet" | "hf" | "bin"
-# - path          : File path / glob / list of globs (supports .gz archives)
-# - weight        : Sampling weight (sampling probability proportional to weight)
-# - stages        : Stages to activate, e.g., ["pretrain"], ["sft"]
-# - text_field    : Field containing text (jsonl/parquet/hf). `messages` formats chat
-# - template      : Multi-field template, e.g. "<|user|> {question} <|assistant|> {answer}"
-# - doc_separator : Document delimiter for .txt files (e.g. "\n\n")
-# - min_chars     : Filter out documents shorter than this threshold
-# - max_docs      : Maximum documents to read (0 = unlimited)
-# - max_tokens    : Maximum tokens to encode (0 = unlimited)
-# - hf_name, hf_config, hf_split, hf_revision : HuggingFace hub parameters
-# - enabled       : Set to false to temporarily disable source without deletion
-# -----------------------------------------------------------------------------
+# =============================================================================
+# STAGE 1: PRE-TRAINING SOURCES (~225M Tokens Total)
+# =============================================================================
 
-# --- Example 1: Plain text files (.txt / .md) ---
-# [[data.sources]]
-# name = "local_text"
-# type = "text"
-# path = "data/raw/**/*.txt"
-# doc_separator = "\n\n"
-# min_chars = 64
-# stages = ["pretrain"]
-# weight = 1.0
+# 1. FineWeb-Edu (Score >= 3 Educational Web Knowledge)
+[[data.sources]]
+name = "fineweb_edu"
+type = "hf"
+hf_name = "HuggingFaceFW/fineweb-edu"
+hf_config = "sample-10BT"
+hf_split = "train"
+text_field = "text"
+min_chars = 200
+max_tokens = 100_000_000
+stages = ["pretrain"]
+weight = 0.45
+enabled = true
 
-# --- Example 2: Hugging Face Hub Dataset (Streaming) ---
-# [[data.sources]]
-# name = "wiki_en"
-# type = "hf"
-# hf_name = "wikimedia/wikipedia"
-# hf_config = "20231101.en"
-# hf_split = "train"
-# text_field = "text"
-# max_tokens = 200_000_000
-# stages = ["pretrain"]
-# weight = 0.5
+# 2. FineMath-4plus (Curated Step-by-Step Mathematical Web Corpus, Score 4-5)
+[[data.sources]]
+name = "finemath_4plus"
+type = "hf"
+hf_name = "HuggingFaceTB/finemath"
+hf_config = "finemath-4plus"
+hf_split = "train"
+text_field = "text"
+min_chars = 150
+max_tokens = 60_000_000
+stages = ["pretrain"]
+weight = 0.25
+enabled = true
 
-# --- Example 3: Parquet Datasets (FineWeb-Edu / Cosmopedia) ---
-# [[data.sources]]
-# name = "fineweb_edu"
-# type = "parquet"
-# path = ["data/fineweb-edu/*.parquet"]
-# text_field = "text"
-# min_chars = 200
-# stages = ["pretrain"]
-# weight = 0.4
+# 3. Cosmopedia-v2 (Synthetic Textbooks, College Lectures & Structured Articles)
+[[data.sources]]
+name = "cosmopedia_v2"
+type = "hf"
+hf_name = "HuggingFaceTB/smollm-corpus"
+hf_config = "cosmopedia-v2"
+hf_split = "train"
+text_field = "text"
+min_chars = 200
+max_tokens = 40_000_000
+stages = ["pretrain"]
+weight = 0.18
+enabled = true
 
-# --- Example 4: SFT / Math Reasoning CoT Dataset (.jsonl / .jsonl.gz) ---
-# [[data.sources]]
-# name = "math_cot_sft"
-# type = "jsonl"
-# path = "data/sft/math/*.jsonl"
-# template = "<|bos|><|user|> {question} <|assistant|><|think|> {reasoning} <|/think|><|answer|> {answer}"
-# stages = ["sft"]
-# weight = 1.0
+# 4. OpenCoder Algorithmic Corpus (Python & Algorithmic Code Synthesis)
+[[data.sources]]
+name = "opencoder_python"
+type = "hf"
+hf_name = "OpenCoder-LLM/opc-annealing-corpus"
+hf_config = "algorithmic_corpus"
+hf_split = "train"
+text_field = "text"
+min_chars = 120
+max_tokens = 25_000_000
+stages = ["pretrain"]
+weight = 0.12
+enabled = true
 
-# --- Example 5: Pre-tokenized binary shards (.bin) ---
-# [[data.sources]]
-# name = "external_bins"
-# type = "bin"
-# path = "data/tokens/*.bin"
-# bin_dtype = "auto"
-# stages = ["pretrain"]
-# weight = 0.1
+# =============================================================================
+# STAGE 2: SFT & REASONING SOURCES (~75M Tokens Total)
+# Automatically normalizes ShareGPT/OpenAI messages and <think> -> <|think|>
+# =============================================================================
 
-# -----------------------------------------------------------------------------
-# DYNAMIC DATA BLENDING SCHEDULE (DATA ANNEALING / CURRICULUM - OPTIONAL)
-# Applies the first phase where `progress < until` (progress = step / total_steps).
-# Useful for increasing high-quality reasoning/math/code weights during WSD decay.
-# -----------------------------------------------------------------------------
-# [[data.phases]]
-# until = 0.85
-# weights = { wiki_en = 0.6, fineweb_edu = 0.4, external_bins = 0.0 }
-#
-# [[data.phases]]
-# until = 1.0
-# weights = { wiki_en = 0.2, fineweb_edu = 0.3, external_bins = 0.5 }
+# 5. OpenThoughts3-1.2M (Frontier Math, Code & Science CoT Traces)
+[[data.sources]]
+name = "openthoughts3"
+type = "hf"
+hf_name = "open-thoughts/OpenThoughts3-1.2M"
+hf_config = "default"
+hf_split = "train"
+text_field = "conversations"
+min_chars = 128
+max_tokens = 35_000_000
+stages = ["sft"]
+weight = 0.45
+enabled = true
+
+# 6. OpenR1-Math-220k (Verified DeepSeek-R1 Mathematical Reasoning Traces)
+[[data.sources]]
+name = "openr1_math"
+type = "hf"
+hf_name = "open-r1/OpenR1-Math-220k"
+hf_config = "default"
+hf_split = "train"
+text_field = "messages"
+min_chars = 128
+max_tokens = 25_000_000
+stages = ["sft"]
+weight = 0.35
+enabled = true
+
+# 7. SmolTalk (Modern Multi-Turn Instruction & Chat Alignment)
+[[data.sources]]
+name = "smoltalk_sft"
+type = "hf"
+hf_name = "HuggingFaceTB/smoltalk"
+hf_config = "all"
+hf_split = "train"
+text_field = "messages"
+min_chars = 64
+max_tokens = 15_000_000
+stages = ["sft"]
+weight = 0.20
+enabled = true
+
+# =============================================================================
+# DYNAMIC DATA BLENDING SCHEDULE (WSD DATA ANNEALING / CURRICULUM)
+# Boosts math & code reasoning density during the final 15% WSD LR decay phase.
+# =============================================================================
+[[data.phases]]
+until = 0.85
+weights = { fineweb_edu = 0.45, finemath_4plus = 0.25, cosmopedia_v2 = 0.18, opencoder_python = 0.12 }
+
+[[data.phases]]
+until = 1.0
+weights = { fineweb_edu = 0.25, finemath_4plus = 0.40, cosmopedia_v2 = 0.15, opencoder_python = 0.20 }

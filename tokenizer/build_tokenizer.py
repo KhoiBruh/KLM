@@ -69,14 +69,62 @@ def _default_training_corpus() -> List[str]:
 	return samples
 
 
+def _iter_configured_corpus(
+	cfg: FullConfig,
+	docs_per_source: int = 500,
+	max_chars_per_doc: int = 16_384,
+) -> Iterable[str]:
+	"""
+	Streams training text from `_default_training_corpus()` + all enabled sources
+	declared in `configs/datasets.toml` so our custom BPE tokenizer learns real
+	English, Math/LaTeX, Code, and CoT reasoning vocabulary directly from the data mix.
+	"""
+	for sample in _default_training_corpus():
+		yield sample
+
+	if docs_per_source <= 0:
+		return
+
+	from src.data_sources import iter_documents
+
+	active_sources = [
+		s for s in cfg.data.sources
+		if s.enabled and s.type.lower() != "bin"
+	]
+	if not active_sources:
+		return
+
+	for src in active_sources:
+		collected = 0
+		try:
+			for doc in iter_documents(src):
+				if not doc:
+					continue
+				yield doc[:max_chars_per_doc]
+				collected += 1
+				if collected % 50 == 0 or collected == docs_per_source:
+					print(
+						f"\r[Tokenizer] Sampling source '{src.name}': {collected}/{docs_per_source} docs...",
+						end="",
+						flush=True,
+					)
+				if collected >= docs_per_source:
+					break
+			if collected > 0:
+				print(f"\r[Tokenizer] Sampled '{src.name}': {collected} documents.                    ")
+		except Exception as exc:
+			print(f"\n[Tokenizer] Warning: skipped source '{src.name}' ({exc}).")
+
+
 def build_bpe_tokenizer(
 	vocab_size: Optional[int] = None,
 	tokenizer_dir: Optional[Union[str, Path]] = None,
 	corpus_files: Optional[List[str]] = None,
 	cfg: Optional[FullConfig] = None,
+	docs_per_source: int = 500,
 ) -> Path:
 	"""
-	Train a Byte-Level BPE Tokenizer with `pre_tokenizers.Digits(individual_digits=True)`
+	Train a custom Byte-Level BPE Tokenizer from scratch with `pre_tokenizers.Digits(individual_digits=True)`
 	to separate each digit 0-9 into independent tokens, then save to `tokenizer/tokenizer.json`.
 	"""
 	if cfg is None:
@@ -114,7 +162,7 @@ def build_bpe_tokenizer(
 
 	trainer = trainers.BpeTrainer(
 		vocab_size=target_vocab_size,
-		min_frequency=1,
+		min_frequency=2,
 		show_progress=False,
 		special_tokens=SPECIAL_TOKENS,
 		initial_alphabet=pre_tokenizers.ByteLevel.alphabet(),
@@ -125,9 +173,9 @@ def build_bpe_tokenizer(
 		if valid_files:
 			tokenizer.train(valid_files, trainer)
 		else:
-			tokenizer.train_from_iterator(_default_training_corpus(), trainer)
+			tokenizer.train_from_iterator(_iter_configured_corpus(cfg, docs_per_source), trainer)
 	else:
-		tokenizer.train_from_iterator(_default_training_corpus(), trainer)
+		tokenizer.train_from_iterator(_iter_configured_corpus(cfg, docs_per_source), trainer)
 
 	bos_id = tokenizer.token_to_id("<|bos|>")
 	eos_id = tokenizer.token_to_id("<|eos|>")
@@ -266,14 +314,33 @@ class Tokenizer:
 
 
 def main():
-	cfg = load_config()
-	out_file = build_bpe_tokenizer(cfg=cfg)
+	import argparse
+
+	parser = argparse.ArgumentParser(description="Build custom Byte-Level BPE tokenizer from active datasets")
+	parser.add_argument("--config", default="config.toml", help="Path to master config.toml")
+	parser.add_argument("--vocab-size", type=int, default=None, help="Override target vocab_size")
+	parser.add_argument(
+		"--docs-per-source",
+		type=int,
+		default=500,
+		help="Number of documents to stream per enabled data source in datasets.toml (0 = offline builtin only)",
+	)
+	parser.add_argument("--offline", action="store_true", help="Train only on builtin synthetic samples")
+	args = parser.parse_args()
+
+	cfg = load_config(args.config)
+	docs_budget = 0 if args.offline else args.docs_per_source
+	out_file = build_bpe_tokenizer(
+		vocab_size=args.vocab_size,
+		cfg=cfg,
+		docs_per_source=docs_budget,
+	)
 	tok = Tokenizer(out_file, cfg, False)
 
-	# Quick test verifying individual digit separation (0-9)
-	test_expr = "ArithMark-3: 12345 + 67890 = 80235"
+	# Quick test verifying individual digit separation (0-9) and reasoning tags
+	test_expr = "<|user|> Solve: 12345 + 67890 <|assistant|> <|think|> Compute sum <|/think|> <|answer|> 80235"
 	encoded = tok.encode(test_expr)
-	decoded = tok.decode(encoded)
+	decoded = tok.decode(encoded, skip_special_tokens=False)
 	digit_tokens = [tok.encode(str(d)) for d in range(10)]
 	print(f"[Test] Original text  : {test_expr}")
 	print(f"[Test] Token IDs      : {encoded} (len={len(encoded)})")
