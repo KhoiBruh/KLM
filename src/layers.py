@@ -1,11 +1,11 @@
 """
-Các khối tầng cơ sở (Core Layers) của kiến trúc Open-SLM Killer
-===============================================================
-Bao gồm:
-- `RMSNorm`: Chuẩn hóa Root Mean Square tốc độ cao.
-- `RotaryEmbedding` & `apply_rotary_pos_emb`: Mã hóa vị trí xoay (RoPE) hỗ trợ mở rộng ngữ cảnh.
-- `DepthwiseShortConv`: Tích chập nhân quả chiều sâu (kernel=5) đặt trước QKV, hỗ trợ state cache O(1).
-- `SwiGLUMLP`: Mạng tiến truyền SwiGLU.
+Core Layers & Primitives
+========================
+Foundational neural network modules:
+- `RMSNorm`: High-performance Root Mean Square Layer Normalization.
+- `RotaryEmbed` & `rotary_pos_emb`: Rotary Position Embedding (RoPE) with dynamic context extension.
+- `DepthwiseShortConv`: Causal depthwise 1D convolution helper.
+- `SwiGLUMLP`: SwiGLU feed-forward network.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import torch.nn.functional as F
 
 
 class RMSNorm(nn.Module):
-	"""Chuẩn hóa Root Mean Square Layer Normalization tốc độ cao."""
+	"""Root Mean Square Layer Normalization (RMSNorm)."""
 
 	def __init__(self, dim: int, eps: float = 1e-6):
 		super().__init__()
@@ -35,8 +35,8 @@ class RMSNorm(nn.Module):
 
 class RotaryEmbed(nn.Module):
 	"""
-	Rotary Positional Embedding (RoPE) hỗ trợ mở rộng ngữ cảnh (`scaling_factor`)
-	và tự động mở rộng bộ đệm `cos`/`sin` khi gặp chuỗi dài hơn `max_seq_len`.
+	Rotary Positional Embedding (RoPE) supporting context extension (`scaling_factor`)
+	with dynamic cache reallocation when sequences exceed `max_seq_len`.
 	"""
 
 	def __init__(
@@ -79,7 +79,7 @@ class RotaryEmbed(nn.Module):
 
 
 def rotate_half(x: torch.Tensor) -> torch.Tensor:
-	"""Xoay nửa chiều ẩn của vector phục vụ RoPE."""
+	"""Rotates half the hidden dimensions of a tensor for RoPE."""
 	x1 = x[..., : x.shape[-1] // 2]
 	x2 = x[..., x.shape[-1] // 2:]
 	return torch.cat((-x2, x1), dim=-1)
@@ -91,7 +91,7 @@ def rotary_pos_emb(
 	cos: torch.Tensor,
 	sin: torch.Tensor,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-	"""Áp dụng phép xoay RoPE cho Q và K có chiều `(B, n_heads, T, head_dim)`."""
+	"""Applies RoPE rotation to Q and K with shapes `(B, n_heads, T, head_dim)`."""
 	cos = cos.unsqueeze(0).unsqueeze(0)  # (1, 1, T, head_dim)
 	sin = sin.unsqueeze(0).unsqueeze(0)  # (1, 1, T, head_dim)
 	q_embed = (q * cos) + (rotate_half(q) * sin)
@@ -100,10 +100,7 @@ def rotary_pos_emb(
 
 
 class DepthwiseShortConv(nn.Module):
-	"""
-	Lớp tích chập nhân quả chiều sâu (Causal Depthwise Conv1d) đặt ngay trước QKV
-	giúp nắm bắt ngữ cảnh cục bộ của chuỗi BPE và hỗ trợ trạng thái đệm O(1) khi sinh văn bản.
-	"""
+	"""Causal depthwise 1D convolution helper."""
 
 	def __init__(self, d_model: int, kernel_size: int = 5):
 		super().__init__()
@@ -141,7 +138,6 @@ class DepthwiseShortConv(nn.Module):
 				padded, self.conv.weight, bias=None, stride=1, padding=0, groups=self.d_model
 			)
 		else:
-			# Cắt bỏ phần padding thừa ở cuối chuỗi để đảm bảo tính nhân quả (causal)
 			out = self.conv(x_t)[..., :seq_len]
 
 		new_state: Optional[torch.Tensor] = None
@@ -159,7 +155,7 @@ class DepthwiseShortConv(nn.Module):
 
 
 class SwiGLUMLP(nn.Module):
-	"""Mạng tiến truyền SwiGLU (SiLU Gated Linear Unit)."""
+	"""SwiGLU feed-forward network (SiLU Gated Linear Unit)."""
 
 	def __init__(self, d_model: int, d_ff: int, dropout: float = 0.0):
 		super().__init__()

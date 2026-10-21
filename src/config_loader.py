@@ -1,23 +1,22 @@
 """
-Bộ đọc tự động tệp cấu hình trung tâm "config.toml" ở thư mục gốc của dự án.
-Hỗ trợ truy cập dạng thuộc tính lồng nhau (cfg.model.d_model) và hệ thống Preset
-mở rộng quy mô từ <10M (9.98M), 100M, 500M lên tới 1B, 3B, 7B+ (vài tỷ tham số).
+Configuration Loader Module
+===========================
+Automated parser for root `config.toml` with nested attribute access
+and multi-billion parameter scaling presets (10M -> 7B+).
 """
 
 from __future__ import annotations
 
 import tomllib
-
 import copy
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-# Thư mục gốc của dự án: pathlib.Path(__file__).resolve().parent.parent
 PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG_PATH: Path = PROJECT_ROOT / "config.toml"
 
-# Bảng cấu hình mở rộng quy mô từ <10M lên tới hàng tỷ tham số (Multi-Billion Scale Presets)
+# Multi-Billion Scale Presets
 SCALE_PRESETS: Dict[str, Dict[str, Any]] = {
 	"10m": {
 		"vocab_size": 4096,
@@ -127,7 +126,7 @@ class ModelConfig:
 	dropout: float = 0.0
 	tie_word_embeddings: bool = True
 
-	# Cấu hình LLaDA Diffusion
+	# LLaDA Diffusion configuration
 	is_causal: bool = False
 	mask_token_id: int = 4
 	sampling_steps: int = 64
@@ -139,12 +138,12 @@ class ModelConfig:
 			preset_vals = SCALE_PRESETS[preset_key]
 			for k, v in preset_vals.items():
 				setattr(self, k, v)
-		# Đảm bảo tính nhất quán của head_dim và n_kv_heads
+		# Enforce head dimension and head divisibility consistency
 		if self.head_dim <= 0:
 			self.head_dim = self.d_model // self.n_heads
 		if self.n_heads % self.n_kv_heads != 0:
 			raise ValueError(
-				f"n_heads ({self.n_heads}) phải chia hết cho n_kv_heads ({self.n_kv_heads})."
+				f"n_heads ({self.n_heads}) must be divisible by n_kv_heads ({self.n_kv_heads})."
 			)
 
 
@@ -169,7 +168,7 @@ class TrainingConfig:
 	stable_ratio: float = 0.82
 	decay_ratio: float = 0.15
 
-	# Cấu hình Masking Diffusion
+	# Masked Diffusion configuration
 	mask_ratio_min: float = 0.15
 	mask_ratio_max: float = 1.0
 	noise_schedule: str = "uniform"
@@ -193,14 +192,14 @@ class RLGRPOConfig:
 @dataclass
 class DataSourceConfig:
 	"""
-	Một nguồn dữ liệu trong hỗn hợp huấn luyện (khai báo bằng `[[data.sources]]` trong config.toml).
+	A data source in the training blend (declared via `[[data.sources]]` in config.toml).
 
 	type:
-	  - "text"    : tệp văn bản thuần (.txt/.md/...), hỗ trợ glob `data/raw/**/*.txt`
-	  - "jsonl"   : JSON Lines (.jsonl / .jsonl.gz), lấy `text_field` hoặc ghép bằng `template`
-	  - "parquet" : tệp Parquet (cần `pyarrow`)
-	  - "hf"      : Hugging Face Hub dataset, đọc streaming (cần `datasets`)
-	  - "bin"     : shard token đã mã hoá sẵn (uint16/uint32 memmap) — bỏ qua bước token hoá
+	  - "text"    : Plain text files (.txt/.md/...), supports glob `data/raw/**/*.txt`
+	  - "jsonl"   : JSON Lines (.jsonl / .jsonl.gz), extracts `text_field` or formats via `template`
+	  - "parquet" : Parquet files (requires `pyarrow`)
+	  - "hf"      : Hugging Face Hub streaming dataset (requires `datasets`)
+	  - "bin"     : Pre-tokenized uint16/uint32 binary memmap shards
 	"""
 
 	name: str = "source"
@@ -210,13 +209,13 @@ class DataSourceConfig:
 	enabled: bool = True
 	stages: List[str] = field(default_factory=lambda: ["pretrain"])
 
-	# Trích xuất văn bản
+	# Text extraction
 	text_field: str = "text"
-	template: str = ""  # Ví dụ: "<|user|> {question} <|assistant|> {answer}"
-	doc_separator: str = ""  # "" = mỗi tệp là 1 tài liệu; "\n\n" = tách theo đoạn
-	min_chars: int = 0  # Lọc tài liệu quá ngắn
-	max_docs: int = 0  # 0 = không giới hạn
-	max_tokens: int = 0  # 0 = không giới hạn (giới hạn số token sau khi mã hoá)
+	template: str = ""
+	doc_separator: str = ""
+	min_chars: int = 0
+	max_docs: int = 0
+	max_tokens: int = 0
 
 	# Hugging Face Hub
 	hf_name: str = ""
@@ -224,16 +223,15 @@ class DataSourceConfig:
 	hf_split: str = "train"
 	hf_revision: str = ""
 
-	# Nguồn "bin" có sẵn
+	# Pre-tokenized binary files
 	bin_dtype: str = "auto"  # "auto" | "uint16" | "uint32"
 
 
 @dataclass
 class DataPhaseConfig:
 	"""
-	Lịch trình trộn dữ liệu theo tiến độ huấn luyện (curriculum / annealing).
-	Áp dụng cho các bước có `progress < until` (progress = step / total_steps).
-	`weights` ghi đè trọng số của từng nguồn theo tên; nguồn không nêu tên giữ trọng số gốc.
+	Data curriculum / annealing phase configuration.
+	Applied for training steps where `progress < until` (progress = step / total_steps).
 	"""
 
 	until: float = 1.0
@@ -242,13 +240,13 @@ class DataPhaseConfig:
 
 @dataclass
 class DataConfig:
-	cache_dir: str = "data/cache"  # Nơi lưu shard token đã mã hoá
-	shard_size_tokens: int = 100_000_000  # Số token tối đa mỗi shard (~200MB với uint16)
-	val_ratio: float = 0.005  # Tỷ lệ tài liệu dành cho tập validation
-	append_eos: bool = True  # Chèn <|eos|> giữa các tài liệu khi đóng gói
+	cache_dir: str = "data/cache"
+	shard_size_tokens: int = 100_000_000
+	val_ratio: float = 0.005
+	append_eos: bool = True
 	prepend_bos: bool = False
-	tokenize_batch_size: int = 1024  # Số tài liệu mỗi lô khi token hoá (Rust đa luồng)
-	synthetic_fallback: bool = True  # Dùng dữ liệu toán giả lập nếu chưa khai báo nguồn nào
+	tokenize_batch_size: int = 1024
+	synthetic_fallback: bool = True
 	sources: List[DataSourceConfig] = field(default_factory=list)
 	phases: List[DataPhaseConfig] = field(default_factory=list)
 
@@ -265,7 +263,7 @@ class DataConfig:
 		]
 
 	def weights_at(self, progress: float, sources: List[DataSourceConfig]) -> List[float]:
-		"""Trả về trọng số trộn (chưa chuẩn hoá) của các nguồn tại tiến độ `progress` ∈ [0, 1]."""
+		"""Returns unnormalized source blending weights at given `progress` in [0, 1]."""
 		override: Dict[str, float] = {}
 		for phase in sorted(self.phases, key=lambda p: p.until):
 			if progress < phase.until:
@@ -294,12 +292,12 @@ class FullConfig:
 			"data": asdict(self.data),
 		}
 
-	def scale_preset(self, preset_name: str):
-		"""Chuyển đổi nhanh cấu hình sang quy mô lớn hơn (10m, 100m, 500m, 1b, 3b, 7b)."""
+	def scale_preset(self, preset_name: str) -> None:
+		"""Quickly scales configuration to target size preset (10m, 100m, 500m, 1b, 3b, 7b)."""
 		preset_key = preset_name.strip().lower()
 		if preset_key not in SCALE_PRESETS:
 			valid = ", ".join(SCALE_PRESETS.keys())
-			raise ValueError(f"Preset '{preset_name}' không hợp lệ. Hỗ trợ: {valid}")
+			raise ValueError(f"Invalid preset '{preset_name}'. Supported: {valid}")
 		self.model.scale_preset = preset_key
 		self.model.apply_preset_if_needed()
 		self.project.name = f"slm-killer-{preset_key}"
@@ -311,11 +309,7 @@ def _filter_dataclass_kwargs(cls: Any, data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _deep_merge_dict(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
-	"""
-	Gộp đệ quy 2 từ điển cấu hình TOML:
-	- Nếu cả hai cùng là dict (ví dụ `[model]`, `[training]`, `[data]`): gộp từng khóa con.
-	- Nếu là danh sách hoặc giá trị đơn (ví dụ `[[data.sources]]`): giá trị mới ghi đè lên giá trị cũ.
-	"""
+	"""Recursively merges two TOML dictionaries."""
 	merged = copy.deepcopy(base)
 	for k, v in override.items():
 		if k in merged and isinstance(merged[k], dict) and isinstance(v, dict):
@@ -326,18 +320,14 @@ def _deep_merge_dict(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str
 
 
 def _load_toml_includes(path: Path, visited: Optional[set[Path]] = None) -> Dict[str, Any]:
-	"""
-	Đọc tệp TOML và tự động nạp gộp toàn bộ các tệp con được khai báo trong `includes = [...]`.
-	Các khóa khai báo trực tiếp trong tệp cha sẽ được ưu tiên ghi đè lên tệp được include.
-	"""
+	"""Loads TOML configuration file and resolves all sub-files declared in `includes = [...]`."""
 	resolved = path.resolve()
 	if visited is None:
 		visited = set()
 	if resolved in visited:
-		raise ValueError(f"Phát hiện vòng lặp nạp cấu hình (circular include) tại: {resolved}")
+		raise ValueError(f"Circular include detected at: {resolved}")
 	visited.add(resolved)
 
-	# utf-8-sig: chấp nhận cả tệp có BOM (Notepad / PowerShell trên Windows hay tự thêm)
 	current_raw: Dict[str, Any] = tomllib.loads(resolved.read_text(encoding="utf-8-sig"))
 	include_list = current_raw.pop("includes", None)
 
@@ -346,7 +336,6 @@ def _load_toml_includes(path: Path, visited: Optional[set[Path]] = None) -> Dict
 		for inc_item in include_list:
 			inc_path = Path(str(inc_item))
 			if not inc_path.is_absolute():
-				# Ưu tiên tìm tương đối theo thư mục chứa tệp cấu hình hiện tại, sau đó tới PROJECT_ROOT
 				candidate_local = resolved.parent / inc_path
 				inc_resolved = candidate_local if candidate_local.exists() else (PROJECT_ROOT / inc_path)
 			else:
@@ -354,7 +343,7 @@ def _load_toml_includes(path: Path, visited: Optional[set[Path]] = None) -> Dict
 
 			if not inc_resolved.exists():
 				raise FileNotFoundError(
-					f"Không tìm thấy tệp cấu hình thành phần '{inc_item}' (được khai báo trong '{resolved}')."
+					f"Included configuration file '{inc_item}' not found (declared in '{resolved}')."
 				)
 			sub_dict = _load_toml_includes(inc_resolved, visited=visited)
 			accumulated = _deep_merge_dict(accumulated, sub_dict)
@@ -367,13 +356,11 @@ def load_config(
 	scale_override: Optional[str] = None,
 ) -> FullConfig:
 	"""
-	Tự động tìm và đọc tệp cấu hình `config.toml` tại thư mục gốc của dự án (kèm các tệp
-	thành phần trong `configs/` thông qua `includes`).
-	Đảm bảo dù người dùng gọi script từ bất kỳ thư mục làm việc nào vẫn nạp đúng file.
+	Finds and loads master `config.toml` at project root with included sub-configs.
+	Resolves paths correctly regardless of working directory.
 	"""
 	candidate = Path(path)
 	if not candidate.is_absolute():
-		# Ưu tiên tìm tại thư mục gốc dự án (Path(__file__).resolve().parent.parent / "config.toml")
 		root_candidate = PROJECT_ROOT / candidate
 		if root_candidate.exists():
 			resolved_path = root_candidate
@@ -386,8 +373,8 @@ def load_config(
 
 	if not resolved_path.exists():
 		raise FileNotFoundError(
-			f"Không tìm thấy tệp cấu hình tại '{resolved_path}'. "
-			f"Hãy đảm bảo tệp 'config.toml' nằm ở thư mục gốc dự án ({PROJECT_ROOT})."
+			f"Configuration file not found at '{resolved_path}'. "
+			f"Ensure 'config.toml' exists at project root ({PROJECT_ROOT})."
 		)
 
 	raw_copy = _load_toml_includes(resolved_path)
@@ -409,7 +396,7 @@ def load_config(
 	]
 	names = [s.name for s in data_cfg.sources]
 	if len(names) != len(set(names)):
-		raise ValueError(f"Tên nguồn dữ liệu trong [[data.sources]] bị trùng: {names}")
+		raise ValueError(f"Duplicate data source name found in [[data.sources]]: {names}")
 
 	if scale_override:
 		model_cfg.scale_preset = scale_override

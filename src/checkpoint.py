@@ -1,13 +1,12 @@
 """
-Quản lý Lưu trữ Chuẩn Safetensors & Kiểm toán Tham số Mô hình
-=============================================================
-Bao gồm:
-- `count_parameters`: Đếm chính xác tham số thực tế trên mô hình PyTorch.
-- `estimate_config_parameters`: Tính giải tích chính xác 100% số lượng tham số từ `ModelConfig`
-  (không cần khởi tạo tensor vào RAM, hỗ trợ kiểm tra ngay cả khi chưa cài đặt PyTorch).
-- `save_safetensors_checkpoint` & `load_safetensors_checkpoint`: Lưu và nạp `.safetensors`
-  đơn tệp hoặc phân mảnh (Sharded Safetensors) cho quy mô lên tới vài tỷ tham số, tự động
-  xử lý Weight Tying (`lm_head.weight` <-> `tok_embeddings.weight`).
+Safetensors Storage Management & Parameter Auditing
+===================================================
+Provides:
+- `count_params`: Exact parameter counting on PyTorch models.
+- `est_config_params`: Analytic 100% exact parameter calculation from `ModelConfig`
+  without memory allocation (inspects models up to 7B+ params with 0 RAM).
+- `save_checkpoint` & `load_checkpoint`: Save and load standard `.safetensors` files
+  (single file or sharded) with automatic weight-tying restoration.
 """
 
 from __future__ import annotations
@@ -37,7 +36,7 @@ except ImportError:
 
 def est_config_params(cfg: Union[FullConfig, ModelConfig]) -> Dict[str, Any]:
 	"""
-	Tính toán giải tích chính xác tuyệt đối số lượng tham số độc nhất của kiến trúc LLaDA từ `ModelConfig`.
+	Calculates exact analytic parameter counts for the LLaDA architecture directly from `ModelConfig`.
 	"""
 	m = cfg.model if isinstance(cfg, FullConfig) else cfg
 	m.apply_preset_if_needed()
@@ -80,7 +79,8 @@ def est_config_params(cfg: Union[FullConfig, ModelConfig]) -> Dict[str, Any]:
 
 def count_params(model: Any) -> Dict[str, Any]:
 	"""
-	Đếm chính xác số lượng tham số độc nhất trên đối tượng mô hình PyTorch LLaDA.
+	Counts unique parameters in a PyTorch LLaDA model instance.
+	Handles weight-tying duplicates correctly.
 	"""
 	if isinstance(model, (FullConfig, ModelConfig)) or not HAS_TORCH:
 		return est_config_params(model)
@@ -129,7 +129,7 @@ def count_params(model: Any) -> Dict[str, Any]:
 
 
 def _unwrap_model(model: Any) -> Any:
-	"""Lấy mô hình gốc nếu đang bọc trong `torch.compile` hoặc `DDP`/`FSDP`."""
+	"""Unwraps raw model from `torch.compile` or distributed wrappers (`DDP`/`FSDP`)."""
 	raw = model
 	if hasattr(raw, "_orig_mod"):
 		raw = raw._orig_mod
@@ -148,14 +148,12 @@ def save_checkpoint(
 	export_inference_copy: bool = False,
 ) -> Path:
 	"""
-	Lưu trọng số mô hình theo định dạng chuẩn `.safetensors` (an toàn, mmap 0-copy):
-	- Tự động xử lý Weight Tying (`lm_head.weight` dùng chung bộ nhớ với `tok_embeddings.weight`).
-	- Tự động chia nhỏ thành nhiều shard (`model-00001-of-0000N.safetensors` + `model.safetensors.index.json`)
-	  nếu mô hình ở quy mô nhiều tỷ tham số vượt quá `max_shard_size_gb`.
+	Saves model weights in standard `.safetensors` format (zero-copy mmap).
+	Automatically handles weight-tying and shards large models exceeding `max_shard_size_gb`.
 	"""
 	if not HAS_SAFETENSORS:
 		raise ImportError(
-			"Thư viện 'safetensors' chưa được cài đặt. Hãy chạy: pip install safetensors"
+			"Package 'safetensors' is required. Install via: pip install safetensors"
 		)
 
 	ckpt_root = Path(checkpoint_dir)
@@ -168,8 +166,6 @@ def save_checkpoint(
 	tied_keys: Dict[str, str] = {}
 
 	for key, tensor in state_dict.items():
-		if export_inference_copy and key.startswith("mtp_proj"):
-			continue
 		ptr = tensor.data_ptr()
 		if ptr in seen_ptrs:
 			tied_keys[key] = seen_ptrs[ptr]
@@ -254,12 +250,12 @@ def load_checkpoint(
 	strict: bool = False,
 ) -> Dict[str, Any]:
 	"""
-	Nạp trọng số mô hình từ tệp `.safetensors` (đơn tệp hoặc phân mảnh `model.safetensors.index.json`),
-	tự động khôi phục liên kết Weight Tying và trạng thái huấn luyện.
+	Loads model weights from a `.safetensors` file or sharded index file,
+	restoring tied weights and optimizer state if available.
 	"""
 	if not HAS_SAFETENSORS:
 		raise ImportError(
-			"Thư viện 'safetensors' chưa được cài đặt. Hãy chạy: pip install safetensors"
+			"Package 'safetensors' is required. Install via: pip install safetensors"
 		)
 
 	target = Path(checkpoint_dir_or_file)
@@ -277,7 +273,7 @@ def load_checkpoint(
 	else:
 		candidates = sorted(ckpt_dir.glob("*.safetensors"), key=lambda p: p.stat().st_mtime)
 		if not candidates:
-			raise FileNotFoundError(f"Không tìm thấy tệp .safetensors nào trong '{ckpt_dir}'.")
+			raise FileNotFoundError(f"No .safetensors files found in '{ckpt_dir}'.")
 		safetensor_file = candidates[-1]
 		index_file = None
 
@@ -326,6 +322,6 @@ def load_checkpoint(
 			if optimizer is not None and trainer_state.get("optimizer") is not None:
 				optimizer.load_state_dict(trainer_state["optimizer"])
 		except Exception as exc:
-			print(f"[Cảnh báo] Không thể nạp trainer_state.pt: {exc}")
+			print(f"[Warning] Failed to load trainer_state.pt: {exc}")
 
 	return info

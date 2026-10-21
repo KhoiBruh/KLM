@@ -1,11 +1,11 @@
 """
-Kịch bản Suy luận & Trực quan hóa LLaDA Diffusion Sampler (`inference.py`)
-=========================================================================
-- Giải mã khuếch tán bán tự hồi quy (Confidence-based Masked Diffusion Sampler).
-- Hiển thị trực quan theo thời gian thực (Live Streaming Denoising Display):
-  Xem câu văn dần "hiện hình" từ nhiễu hạt `<|mask|>` qua từng bước, đồng thời
-  đo tốc độ tức thời `tok/s` và `steps/s` nhảy số liên tục trên màn hình.
-- Hỗ trợ CLI tương tác trực tiếp hoặc chạy đơn với tham số `--prompt`.
+LLaDA Diffusion Sampler & Inference Script (`inference.py`)
+==========================================================
+- Confidence-based Masked Diffusion Sampler (semi-autoregressive / non-autoregressive generation).
+- Live Streaming Denoising Display:
+  Watch the completion emerge from `<|mask|>` noise step-by-step,
+  with real-time instantaneous `tok/s` and `steps/s` counters.
+- Supports interactive CLI mode or single-prompt execution via `--prompt`.
 """
 
 from __future__ import annotations
@@ -29,9 +29,9 @@ def decode_masked_tokens(
 	mask_char: str = "·",
 ) -> str:
 	"""
-	Giải mã chuỗi token có chứa MASK:
-	- Các token bình thường được giải mã thành văn bản mượt mà.
-	- Các token đang là `mask_token_id` được biểu diễn bằng ký tự mờ `mask_char`.
+	Decode a token sequence containing MASK tokens:
+	- Normal tokens are decoded into smooth text.
+	- Tokens equal to `mask_token_id` are displayed using `mask_char`.
 	"""
 	parts: List[str] = []
 	buffer: List[int] = []
@@ -66,7 +66,7 @@ def generate_llada(
 	print_each_step: bool = False
 ) -> str:
 	"""
-	Sinh văn bản với LLaDA Masked Diffusion Sampler kèm theo đồng hồ đo tok/s thời gian thực.
+	Generate text with the LLaDA Masked Diffusion Sampler accompanied by real-time speed monitoring.
 	"""
 	model.eval()
 	formatted_prompt = (
@@ -100,7 +100,7 @@ def generate_llada(
 			preview_clean = preview_clean[:57] + "..."
 
 		status_line = (
-			f"\r  [Khử nhiễu {step:02d}/{total_steps:02d} | Mở {unmasked_count:02d}/{gen_length} tok | "
+			f"\r  [Denoise {step:02d}/{total_steps:02d} | Unmasked {unmasked_count:02d}/{gen_length} tok | "
 			f"{tok_speed:5.1f} tok/s | {step_speed:4.1f} step/s] > {preview_clean}"
 		)
 
@@ -122,7 +122,7 @@ def generate_llada(
 	)
 	elapsed = max(1e-6, time.perf_counter() - t0)
 
-	# Xóa dòng trạng thái tạm thời để in kết quả cuối cùng rõ ràng
+	# Clear temporary status line to print final output cleanly
 	if stream and not print_each_step and last_status_len > 0:
 		sys.stdout.write("\r" + " " * (last_status_len + 10) + "\r")
 		sys.stdout.flush()
@@ -135,7 +135,7 @@ def generate_llada(
 
 	print(f"{decoded_text}")
 	print(
-		f"  [LLaDA Sampler: {steps} steps | {gen_length} tokens trong {elapsed:.2f}s -> "
+		f"  [LLaDA Sampler: {steps} steps | {gen_length} tokens in {elapsed:.2f}s -> "
 		f"{speed:.1f} tok/s | {step_speed:.1f} step/s]"
 	)
 	return decoded_text
@@ -143,16 +143,16 @@ def generate_llada(
 
 def main() -> None:
 	parser = argparse.ArgumentParser(
-		description="Thử nghiệm sinh văn bản với LLaDA Diffusion Sampler & Live Streaming."
+		description="Inference and text generation with LLaDA Diffusion Sampler & Live Streaming."
 	)
-	parser.add_argument("--config", type=str, default="config.toml", help="Đường dẫn tới config.toml")
-	parser.add_argument("--prompt", type=str, default=None, help="Prompt câu hỏi")
-	parser.add_argument("--gen-length", type=int, default=64, help="Độ dài văn bản sinh thêm (số token)")
-	parser.add_argument("--steps", type=int, default=32, help="Số bước khuếch tán (diffusion steps)")
-	parser.add_argument("--temperature", type=float, default=0.0, help="Nhiệt độ lấy mẫu (0 = greedy confidence)")
-	parser.add_argument("--schedule", type=str, default="cosine", choices=["cosine", "linear"], help="Lịch trình unmasking")
-	parser.add_argument("--no-stream", action="store_true", help="Tắt hiển thị khử nhiễu trực tiếp")
-	parser.add_argument("--show-steps", action="store_true", help="In từng bước ra dòng mới thay vì ghi đè")
+	parser.add_argument("--config", type=str, default="config.toml", help="Path to config.toml")
+	parser.add_argument("--prompt", type=str, default=None, help="Input prompt")
+	parser.add_argument("--gen-length", type=int, default=64, help="Number of generated tokens")
+	parser.add_argument("--steps", type=int, default=32, help="Number of diffusion denoising steps")
+	parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature (0 = greedy confidence)")
+	parser.add_argument("--schedule", type=str, default="cosine", choices=["cosine", "linear"], help="Unmasking schedule")
+	parser.add_argument("--no-stream", action="store_true", help="Disable live denoising streaming")
+	parser.add_argument("--show-steps", action="store_true", help="Print each step on a new line instead of in-place overwrite")
 	args = parser.parse_args()
 
 	cfg = load_config(args.config)
@@ -171,17 +171,17 @@ def main() -> None:
 	):
 		try:
 			info = load_checkpoint(model, ckpt_dir, device)
-			print(f"[Inference] Đã nạp trọng số Safetensors từ '{info['loaded_from']}' (step={info['step']}).")
+			print(f"[Inference] Loaded Safetensors weights from '{info['loaded_from']}' (step={info['step']}).")
 		except Exception as exc:
-			print(f"[Inference] Cảnh báo khi nạp checkpoint ({exc}), chạy với trọng số ngẫu nhiên.")
+			print(f"[Inference] Warning when loading checkpoint ({exc}), running with random weights.")
 	else:
-		print("[Inference] Chưa có checkpoint trong 'checkpoints/', chạy thử với trọng số khởi tạo ngẫu nhiên.")
+		print("[Inference] No checkpoint found in 'checkpoints/', running with random initialization.")
 
 	model.export_for_inference()
 	stats = count_params(model)
 	print(
-		f"[Inference] Mô hình LLaDA sẵn sàng trên '{device}' | "
-		f"Tham số: {stats['inference_params']:,} ({stats['inference_params'] / 1e6:.2f}M) | "
+		f"[Inference] LLaDA model ready on '{device}' | "
+		f"Parameters: {stats['inference_params']:,} ({stats['inference_params'] / 1e6:.2f}M) | "
 		f"Attention: Bidirectional | Mask ID: {tokenizer.mask_id}"
 	)
 
@@ -199,19 +199,19 @@ def main() -> None:
 		return
 
 	print("\n" + "=" * 74)
-	print(" GIAO DIỆN THỬ NGHIỆM LLADA DIFFUSION SAMPLER (Gõ 'exit' để thoát)")
+	print(" LLADA DIFFUSION SAMPLER INTERACTIVE SHELL (Type 'exit' to quit)")
 	print("=" * 74)
 	while True:
 		try:
 			user_in = input("\nUser > ").strip()
 		except (EOFError, KeyboardInterrupt):
-			print("\nĐã thoát phiên làm việc.")
+			print("\nSession exited.")
 			break
 
 		if not user_in:
 			continue
 		if user_in.lower() in ("/exit", "/quit", "exit", "quit"):
-			print("Đã thoát phiên làm việc.")
+			print("Session exited.")
 			break
 
 		print("Assistant > ", end="", flush=True)

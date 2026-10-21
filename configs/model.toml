@@ -1,13 +1,13 @@
 # =============================================================================
-# 2. CẤU HÌNH KIẾN TRÚC MÔ HÌNH LLADA (configs/model.toml)
+# 2. MODEL ARCHITECTURE CONFIGURATION (configs/model.toml)
 # =============================================================================
 
 [model]
-# Chế độ quy mô (Preset): "custom" (dùng thông số bên dưới), hoặc "10m", "100m", "500m", "1b", "3b", "7b"
+# Scaling preset: "custom" (uses parameters below), or "10m", "100m", "500m", "1b", "3b", "7b"
 scale_preset = "custom"
 
-# Cấu hình chuẩn LLaDA (Large Language Diffusion with Masking)
-# Thiết kế tối ưu phân khúc <10M tham số (~9.36M params khi tied embeddings)
+# Standard LLaDA architecture (Large Language Diffusion with Masking - Bidirectional Transformer)
+# Optimized for the <10M parameter regime (~9.36M params with tied embeddings)
 vocab_size = 4096
 d_model = 256
 n_layers = 12
@@ -20,8 +20,8 @@ rope_theta = 10000.0
 rope_scaling_factor = 1.0
 dropout = 0.0
 tie_word_embeddings = true
-use_qk_norm = true            # RMSNorm trên Q và K ổn định hóa phân bố khuếch tán
+use_qk_norm = true            # RMSNorm on Q and K for stable diffusion dynamics
 
-# Tham số Diffusion LLaDA
-mask_token_id = 4             # Token ID của <|mask|>
-sampling_steps = 64           # Số bước khử nhiễu khi sinh văn bản
+# LLaDA Diffusion parameters
+mask_token_id = 4             # Token ID for <|mask|>
+sampling_steps = 64           # Number of diffusion denoising steps during generation

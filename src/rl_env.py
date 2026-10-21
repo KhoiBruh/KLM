@@ -1,10 +1,10 @@
 """
-Môi trường Kiểm chứng Toán học / Logic (Verifiable Sandbox) & Thuật toán GRPO
-=============================================================================
-- Tự động sinh bài toán số học nhiều bước (ArithMark-3 style), tìm quy luật dãy số,
-  và giải phương trình đại số có đáp án kiểm chứng chính xác 100%.
-- Triển khai thuật toán GRPO (Group Relative Policy Optimization) không cần mạng Critic,
-  tiết kiệm 50% VRAM, phù hợp chạy ngay trên RTX 3050 4GB lẫn cụm GPU đám mây.
+Verifiable Mathematical & Logical Reasoning Sandbox & GRPO Algorithm
+====================================================================
+- Procedurally generates multi-step arithmetic problems, numerical sequences,
+  and linear equations with 100% verifiable integer ground-truth answers.
+- Implements Group Relative Policy Optimization (GRPO) without a critic network,
+  saving 50% VRAM footprint for consumer GPUs (RTX 3050 4GB) and cloud clusters.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from tokenizer.build_tokenizer import Tokenizer
 
 @dataclass
 class VerifiableTask:
-	"""Một bài toán kiểm chứng được sinh tự động kèm đáp án chuẩn và lời giải mẫu."""
+	"""A procedural verifiable math reasoning task with reference ground-truth."""
 
 	task_type: str
 	prompt: str
@@ -35,11 +35,11 @@ class VerifiableTask:
 
 class VerifiableMathLogicEnv:
 	"""
-	Môi trường kiểm soát tự động (Verifiable Arithmetic & Logic Sandbox):
-	- Sinh đề bài ngẫu nhiên theo seed có đáp án nguyên kiểm chứng được 100%.
-	- Chấm điểm thưởng (Reward) kết hợp:
-	  1. Điểm chính xác (`1.0` nếu đáp án trùng khớp `ground_truth`, `0.0` nếu sai).
-	  2. Điểm thưởng định dạng suy luận (`+0.2` khi tuân thủ cấu trúc `<|think|>...<|/think|><|answer|>`).
+	Verifiable Arithmetic & Logic Sandbox:
+	- Procedurally generates seeded tasks with 100% verifiable integer answers.
+	- Computes hybrid reward:
+	  1. Correctness reward (1.0 if answer matches ground truth, 0.0 otherwise).
+	  2. Formatting reward (+0.2 when conforming to `<|think|>...<|/think|><|answer|>`).
 	"""
 
 	ANSWER_REGEX = re.compile(r"<\|answer\|>\s*([-+]?\d+)|Answer:\s*([-+]?\d+)|([-+]?\d+)\s*$")
@@ -104,7 +104,7 @@ class VerifiableMathLogicEnv:
 
 	@classmethod
 	def extract_predicted_integer(cls, text: str) -> Optional[int]:
-		"""Trích xuất câu trả lời số nguyên từ chuỗi văn bản mô hình sinh ra."""
+		"""Extracts integer answer from generated model response."""
 		if "<|answer|>" in text:
 			after_ans = text.split("<|answer|>")[-1]
 			nums = re.findall(r"[-+]?\d+", after_ans)
@@ -124,17 +124,16 @@ class VerifiableMathLogicEnv:
 
 	def score_response(self, response_text: str, ground_truth: int) -> Tuple[float, bool]:
 		"""
-		Chấm điểm câu trả lời của mô hình:
-		- Chính xác tuyệt đối đáp án số học: +1.0 điểm
-		- Có thẻ suy luận `<|think|>` ... `<|/think|>` và `<|answer|>`: +0.15 điểm định dạng
-		- Sai số nhỏ (cùng chữ số cuối hoặc gần đúng): +0.05 điểm khuyến khích dẫn hướng ban đầu
+		Scores generated response:
+		- Exact arithmetic correctness: +1.0 point
+		- CoT tags `<|think|>` ... `<|/think|>` and `<|answer|>`: +0.15 formatting bonus
+		- Off-by-one or minor numerical proximity: +0.05 guidance bonus
 		"""
 		pred = self.extract_predicted_integer(response_text)
 		is_correct = pred is not None and (pred == ground_truth)
 
 		reward = 1.0 if is_correct else 0.0
 
-		# Điểm thưởng tuân thủ cấu trúc suy luận CoT
 		has_think = ("<|think|>" in response_text) and ("<|/think|>" in response_text)
 		has_answer_tag = "<|answer|>" in response_text
 		if has_think and has_answer_tag:
@@ -155,7 +154,7 @@ def compute_group_normalized_advantages(
 	rewards: torch.Tensor, eps: float = 1e-6
 ) -> torch.Tensor:
 	"""
-	Chuẩn hóa lợi thế tương đối trong nhóm G câu trả lời (GRPO Advantage):
+	Computes group-normalized advantages across G sampled completions:
 		A_i = (r_i - mean(r)) / (std(r) + eps)
 	"""
 	mean_r = rewards.mean()
@@ -165,11 +164,11 @@ def compute_group_normalized_advantages(
 
 class GRPOTrainer:
 	"""
-	Bộ huấn luyện tăng cường GRPO (Group Relative Policy Optimization) không cần mạng Critic:
-	1. Với mỗi đề bài, mô hình sinh ra G = `group_size` chuỗi suy luận + đáp án.
-	2. Môi trường `VerifiableMathLogicEnv` chấm điểm thưởng r_i cho từng chuỗi.
-	3. Chuẩn hóa lợi thế nhóm A_i = (r_i - mean(r)) / (std(r) + eps).
-	4. Tối ưu hàm mục tiêu Policy Gradient kết hợp phạt phân kỳ KL so với trạng thái tham chiếu.
+	Group Relative Policy Optimization (GRPO) Trainer without Critic:
+	1. Samples G completions for each prompt.
+	2. Evaluates task rewards r_i using `VerifiableMathLogicEnv`.
+	3. Computes normalized advantage A_i.
+	4. Optimizes surrogate policy gradient objective with KL divergence penalty.
 	"""
 
 	def __init__(
@@ -199,7 +198,7 @@ class GRPOTrainer:
 		amp_dtype: torch.dtype = torch.float32,
 		use_amp: bool = False,
 	) -> Dict[str, float]:
-		"""Thực hiện 1 bước cập nhật GRPO hoàn chỉnh trên một bài toán có kiểm chứng."""
+		"""Executes one complete GRPO policy update on a verifiable math problem."""
 		task = self.env.sample_task()
 		prompt_ids = self.tokenizer.encode(task.prompt)
 		prompt_len = len(prompt_ids)
@@ -208,24 +207,18 @@ class GRPOTrainer:
 			[prompt_ids] * self.group_size, dtype=torch.long, device=self.device
 		)
 
-		# 1. Rollout: Sinh G chuỗi câu trả lời bằng KV-Cache
 		self.raw_model.eval()
 		with torch.no_grad():
 			with torch.amp.autocast(device_type=self.device.type, dtype=amp_dtype, enabled=use_amp):
 				sequences = self.raw_model.generate(
 					input_ids=prompt_tensor,
-					max_new_tokens=self.max_gen_len,
+					gen_length=self.max_gen_len,
 					temperature=0.85,
-					top_k=32,
-					top_p=0.92,
-					eos_token_id=self.tokenizer.eos_id,
 				)
 
-				# Tính log-probs tham chiếu (Reference / Old Policy) mà không cần bản sao mô hình thứ 2
-				ref_out = self.raw_model(input_ids=sequences[:, :-1])
+				ref_out = self.raw_model(input_ids=sequences)
 				ref_log_probs = F.log_softmax(ref_out.logits.float(), dim=-1).detach()
 
-		# 2. Chấm điểm từng câu trả lời trong nhóm G
 		rewards_list: List[float] = []
 		correct_count = 0
 		for i in range(self.group_size):
@@ -237,34 +230,30 @@ class GRPOTrainer:
 				correct_count += 1
 
 		rewards = torch.tensor(rewards_list, dtype=torch.float32, device=self.device)
-		advantages = compute_group_normalized_advantages(rewards)  # (G,)
+		advantages = compute_group_normalized_advantages(rewards)
 
-		# 3. Cập nhật Policy với lợi thế tương đối A_i và phạt KL
 		self.model.train()
 		optimizer.zero_grad(set_to_none=True)
 
 		with torch.amp.autocast(device_type=self.device.type, dtype=amp_dtype, enabled=use_amp):
-			out = self.model(input_ids=sequences[:, :-1])
+			out = self.model(input_ids=sequences)
 			logits = out.logits.float()
 			log_probs = F.log_softmax(logits, dim=-1)
 
-			target_ids = sequences[:, 1:]
+			target_ids = sequences
 			token_log_probs = torch.gather(log_probs, dim=-1, index=target_ids.unsqueeze(-1)).squeeze(-1)
 			old_token_log_probs = torch.gather(
 				ref_log_probs, dim=-1, index=target_ids.unsqueeze(-1)
 			).squeeze(-1)
 
-			# Mask chỉ tính trên phần token do mô hình sinh ra (sau prompt)
 			gen_mask = torch.zeros_like(token_log_probs, dtype=torch.float32)
-			gen_start = max(0, prompt_len - 1)
-			gen_mask[:, gen_start:] = 1.0
+			gen_mask[:, prompt_len:] = 1.0
 
-			# Ước lượng KL không chệch (Schulman approximator): exp(ref - cur) - (ref - cur) - 1
 			log_ratio = old_token_log_probs - token_log_probs
 			kl_per_token = torch.exp(log_ratio.clamp(-10.0, 10.0)) - log_ratio - 1.0
 
 			ratio = torch.exp((token_log_probs - old_token_log_probs).clamp(-10.0, 10.0))
-			adv_expanded = advantages.unsqueeze(1)  # (G, 1)
+			adv_expanded = advantages.unsqueeze(1)
 			clipped_ratio = torch.clamp(ratio, 0.8, 1.2)
 			surr1 = ratio * adv_expanded
 			surr2 = clipped_ratio * adv_expanded

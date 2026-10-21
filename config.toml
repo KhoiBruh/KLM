@@ -1,15 +1,15 @@
 # =============================================================================
-# TỆP ĐIỀU PHỐI CẤU HÌNH TRUNG TÂM (MASTER CONFIG HUB - config.toml)
+# MASTER CONFIGURATION HUB (config.toml)
 # =============================================================================
-# Mọi kịch bản (train.py, evaluate.py, inference.py, prepare_data.py) tự động đọc tệp này.
-# Cấu hình chi tiết được tách thành 4 tệp chuyên biệt trong thư mục `configs/`:
-#   1. configs/project.toml  : Thiết bị (CUDA/CPU), kiểu dữ liệu, Safetensors & đường dẫn
-#   2. configs/model.toml    : Kiến trúc mô hình & các preset mở rộng (10M -> 7B+)
-#   3. configs/training.toml : Bộ tối ưu Muon+AdamW, lịch WSD, Masked Diffusion & RL GRPO
-#   4. configs/datasets.toml : Khai báo các nguồn dữ liệu [[data.sources]] & tỷ lệ trộn
+# All execution scripts (train.py, evaluate.py, inference.py, prepare_data.py)
+# automatically read this file. Detailed configurations are split into 4 files:
+#   1. configs/project.toml  : Hardware device, data types, checkpoints & paths
+#   2. configs/model.toml    : Model architecture & scale presets (10M -> 7B+)
+#   3. configs/training.toml : Muon+AdamW optimizers, WSD scheduler, Masked Diffusion
+#   4. configs/datasets.toml : Data sources [[data.sources]] & mixing weights
 #
-# MẸO: Bất kỳ khóa nào bạn khai báo thêm ở bên dưới tệp này sẽ tự động GHI ĐÈ (override)
-# lên giá trị tương ứng trong các tệp thuộc `includes`.
+# TIP: Any key defined directly below will automatically OVERRIDE values
+# from included sub-configs.
 # =============================================================================
 
 includes = [
@@ -19,7 +19,7 @@ includes = [
     "configs/datasets.toml",
 ]
 
-# --- Ví dụ ghi đè nhanh tại chỗ (bỏ dấu # nếu muốn thử nghiệm nhanh) ---
+# --- Quick inline overrides example ---
 # [model]
 # scale_preset = "100m"
 #

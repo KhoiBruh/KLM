@@ -1,11 +1,11 @@
 """
-Mô-đun Bidirectional Attention & Khối Transformer cho kiến trúc LLaDA
-=====================================================================
-LLaDA (Large Language Diffusion with Masking) sử dụng Transformer 2 chiều (Bidirectional):
-- Toàn bộ chuỗi chú ý lẫn nhau (is_causal = False).
-- QK-Norm (`RMSNorm` trên Q và K trước khi xoay RoPE) chống trôi/nổ gradient.
-- RoPE 1D mã hóa vị trí 2 chiều.
-- FlashAttention tối ưu hóa thông qua `F.scaled_dot_product_attention`.
+Bidirectional Attention Module & Transformer Block for LLaDA Architecture
+========================================================================
+LLaDA (Large Language Diffusion with Masking) uses a Bidirectional Transformer:
+- Full non-causal attention across the sequence (is_causal = False).
+- QK-Norm (`RMSNorm` on Query and Key projections prior to RoPE) for training stability.
+- 1D Rotary Position Embedding (RoPE).
+- FlashAttention optimization via `F.scaled_dot_product_attention`.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from .layers import (
 
 @dataclass
 class LayerKVCache:
-	"""Giữ lại tương thích ngược kiểu dữ liệu."""
+	"""Legacy container kept for type compatibility."""
 	k: torch.Tensor
 	v: torch.Tensor
 	conv_state: Optional[torch.Tensor] = None
@@ -40,7 +40,7 @@ class LayerKVCache:
 
 
 def repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
-	"""Lặp các đầu KV cho Grouped-Query Attention (GQA): `(B, n_kv_heads, T, D) -> (B, n_heads, T, D)`."""
+	"""Repeat Key/Value heads for Grouped-Query Attention (GQA): `(B, n_kv_heads, T, D) -> (B, n_heads, T, D)`."""
 	if n_rep == 1:
 		return x
 	bsz, n_kv_heads, seq_len, head_dim = x.shape
@@ -53,10 +53,10 @@ def repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
 
 class GatedGQA(Module):
 	"""
-	Bidirectional Grouped-Query Attention (GQA 2 chiều) chuẩn LLaDA:
-	- Hỗ trợ đầy đủ tương tác 2 chiều giữa các token đã mask và token ngữ cảnh (is_causal=False).
-	- QK-Norm (`RMSNorm` trên Q và K) bảo vệ độ ổn định khi dùng Muon/AdamW.
-	- Tích hợp PyTorch SDPA (FlashAttention / MemEfficient kernel).
+	Bidirectional Grouped-Query Attention (GQA) for LLaDA:
+	- Full bidirectional attention between masked tokens and unmasked context.
+	- QK-Norm (`RMSNorm` on Q and K) prevents gradient spikes under Muon/AdamW.
+	- Optimized with PyTorch SDPA (FlashAttention / MemEfficient kernel).
 	"""
 
 	def __init__(self, cfg: ModelConfig) -> None:
@@ -97,14 +97,14 @@ class GatedGQA(Module):
 			q = self.q_norm(q)
 			k = self.k_norm(k)
 
-		# Áp dụng RoPE 2 chiều: toàn bộ chuỗi
+		# Apply 2D RoPE over full bidirectional sequence
 		cos, sin = rope(q, seq_len, 0)
 		q, k = rotary_pos_emb(q, k, cos, sin)
 
 		k_exp = repeat_kv(k, self.n_rep)
 		v_exp = repeat_kv(v, self.n_rep)
 
-		# LLaDA chú ý 2 chiều (Bidirectional): is_causal = False
+		# LLaDA bidirectional non-causal attention
 		attn_out = F.scaled_dot_product_attention(
 			q, k_exp, v_exp,
 			attn_mask=attention_mask,
@@ -116,12 +116,12 @@ class GatedGQA(Module):
 		return self.o_proj(attn_out), None
 
 
-# Alias chuẩn tên kiến trúc
+# Architectural alias
 BidirectionalGQA = GatedGQA
 
 
 class TransformerBlock(Module):
-	"""Khối Transformer 2 chiều (Bidirectional Block) kết hợp GQA + QK-Norm và SwiGLU MLP."""
+	"""Bidirectional Transformer Block combining GQA + QK-Norm and SwiGLU MLP."""
 
 	def __init__(self, cfg: ModelConfig, layer_idx: int) -> None:
 		super().__init__()

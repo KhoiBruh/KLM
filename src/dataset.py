@@ -1,10 +1,10 @@
 """
-Bộ nạp dữ liệu tốc độ cao (Memory-Mapped Binary Dataset cho LLaDA Diffusion)
-============================================================================
-- Sử dụng `np.memmap` định dạng `uint16` (hoặc `uint32` khi vocab > 65535 cho mô hình nhiều tỷ tham số)
-  giúp nạp dữ liệu với tốc độ tối đa và tốn ~0MB RAM phụ trội.
-- Tự động sinh dữ liệu giả lập (Synthetic Arithmetic, Logic & Reasoning Corpus) nếu chưa có
-  tệp `.bin` thực tế để người dùng chạy thử `python train.py` ngay lập tức.
+High-Throughput Binary Dataset Pipeline (Memory-Mapped Dataset for LLaDA Diffusion)
+===================================================================================
+- Leverages `np.memmap` with `uint16` (or `uint32` for large vocabs > 65535)
+  for zero-overhead data loading and zero RAM bloat.
+- Automatically generates synthetic arithmetic and reasoning tokens if no
+  binary files exist yet, allowing instant testing.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from tokenizer.build_tokenizer import Tokenizer
 
 
 def _select_memmap_dtype(vocab_size: int) -> np.dtype:
-	"""Chọn uint16 cho vocab <= 65535 (10M/100M) và uint32 cho vocab lớn (1B-7B+)."""
+	"""Selects uint16 for vocab <= 65535 (10M/100M) and uint32 for larger vocabs (1B-7B+)."""
 	return np.dtype(np.uint16) if vocab_size <= 65535 else np.dtype(np.uint32)
 
 
@@ -35,8 +35,8 @@ def generate_synthetic_corpus_bin(
 	seed: int = 42,
 ) -> Path:
 	"""
-	Tạo tệp nhị phân `.bin` chứa các bài toán số học nhiều bước, quy luật dãy số và suy luận logic
-	được mã hóa bằng bộ Tokenizer (tách từng chữ số 0-9) nếu người dùng chưa có dữ liệu thực tế.
+	Generates a binary `.bin` token file containing multi-step arithmetic problems,
+	numerical sequences, and logical reasoning samples if no real data is found.
 	"""
 	bin_path.parent.mkdir(parents=True, exist_ok=True)
 	rng = random.Random(seed)
@@ -49,7 +49,7 @@ def generate_synthetic_corpus_bin(
 	while len(buffer) < num_tokens:
 		mode = rng.randint(0, 3)
 		if mode == 0:
-			# Toán số học 2 bước kiểu ArithMark-3
+			# 2-step arithmetic problem
 			a = rng.randint(10, 500)
 			b = rng.randint(5, 200)
 			c = rng.randint(2, 25)
@@ -62,7 +62,7 @@ def generate_synthetic_corpus_bin(
 				f"<|answer|> {ans} <|eos|>\n"
 			)
 		elif mode == 1:
-			# Tìm quy luật dãy số
+			# Sequence induction
 			start = rng.randint(1, 30)
 			diff = rng.randint(2, 15)
 			seq = [start + i * diff for i in range(5)]
@@ -75,7 +75,7 @@ def generate_synthetic_corpus_bin(
 				f"<|answer|> {nxt} <|eos|>\n"
 			)
 		elif mode == 2:
-			# Giải phương trình bậc nhất
+			# Linear equation solving
 			x_val = rng.randint(2, 40)
 			m = rng.randint(2, 12)
 			b = rng.randint(1, 50)
@@ -87,7 +87,7 @@ def generate_synthetic_corpus_bin(
 				f"<|answer|> {x_val} <|eos|>\n"
 			)
 		else:
-			# Suy luận toán lời văn ngắn
+			# Word problem reasoning
 			apples = rng.randint(12, 90)
 			bought = rng.randint(5, 45)
 			shared = rng.randint(2, 10)
@@ -113,10 +113,9 @@ def generate_synthetic_corpus_bin(
 
 class MemmapTokenDataset(Dataset):
 	"""
-	Bộ nạp dữ liệu nhị phân sử dụng `np.memmap` tốc độ cao, tốn 0MB RAM thừa.
-	- Nếu `config.toml` khai báo `[[data.sources]]` cho stage hiện tại → tự động trả về
-	  `MixtureTokenDataset` (trộn nhiều nguồn theo trọng số).
-	- Ngược lại → dùng tệp `.bin` đơn lẻ (tự sinh dữ liệu giả lập nếu chưa có).
+	High-throughput binary dataset loader backed by `np.memmap`.
+	- Returns `MixtureTokenDataset` if `[[data.sources]]` are defined.
+	- Otherwise loads single `.bin` file (generating synthetic tokens if absent).
 	"""
 
 	def __new__(cls, cfg: Optional[FullConfig] = None, split: str = "train", *args: Any, **kwargs: Any):
@@ -126,7 +125,7 @@ class MemmapTokenDataset(Dataset):
 		return super().__new__(cls)
 
 	def set_progress(self, step: int, total_steps: int) -> None:
-		"""Không dùng cho tệp đơn lẻ (giữ tương thích với MixtureTokenDataset)."""
+		"""Unused for single file dataset (kept for MixtureTokenDataset compatibility)."""
 
 	def __init__(
 		self,
@@ -144,7 +143,6 @@ class MemmapTokenDataset(Dataset):
 		if bin_path is not None:
 			self.bin_path = Path(bin_path)
 		else:
-			# Lưu tệp .bin mặc định trong thư mục `checkpoints/` để giữ đúng 3 thư mục gốc
 			ckpt_dir = self.cfg.project.checkpoint_path
 			ckpt_dir.mkdir(parents=True, exist_ok=True)
 			self.bin_path = ckpt_dir / f"{split}_tokens.bin"
@@ -154,8 +152,8 @@ class MemmapTokenDataset(Dataset):
 			num_syn = 262_144 if split == "train" else 32_768
 			seed = self.cfg.project.seed + (0 if split == "train" else 999)
 			print(
-				f"[Dataset] Chưa tìm thấy dữ liệu '{self.bin_path.name}'. "
-				f"Đang khởi tạo dữ liệu giả lập ({num_syn:,} tokens, {self.dtype.name})..."
+				f"[Dataset] File '{self.bin_path.name}' not found. "
+				f"Generating synthetic corpus ({num_syn:,} tokens, {self.dtype.name})..."
 			)
 			generate_synthetic_corpus_bin(
 				self.bin_path, cfg=self.cfg, num_tokens=num_syn, seed=seed
@@ -180,7 +178,6 @@ class MemmapTokenDataset(Dataset):
 		mmap = self._open_memmap()
 		start = (idx * self.seq_len) % max(1, self.total_tokens - self.seq_len - 1)
 		chunk = np.asarray(mmap[start: start + self.seq_len + 1], dtype=np.int64)
-		# Đảm bảo mọi token ID nằm trong phạm vi vocab_size hiện tại
 		if chunk.max() >= self.vocab_size:
 			chunk = chunk % self.vocab_size
 		x = torch.from_numpy(chunk[:-1])
@@ -196,9 +193,7 @@ class MemmapTokenDataset(Dataset):
 		assistant_token_id: int = 5,
 	) -> Tuple[torch.Tensor, torch.Tensor]:
 		"""
-		Lấy ngẫu nhiên một micro-batch trực tiếp từ `np.memmap` với tốc độ cực cao.
-		Khi `sft_masking=True` (giai đoạn SFT), tự động đặt `ignore_index = -100` cho phần câu hỏi
-		trước thẻ `<|assistant|>` để mô hình chỉ tập trung tối ưu hóa câu trả lời và suy luận.
+		Randomly samples a micro-batch directly from `np.memmap`.
 		"""
 		mmap = self._open_memmap()
 		T = seq_len_override if seq_len_override is not None else self.seq_len
@@ -216,7 +211,6 @@ class MemmapTokenDataset(Dataset):
 			y_np[i] = segment[1:]
 
 			if sft_masking:
-				# Tìm vị trí của token <|assistant|> và mask các vị trí câu hỏi nếu tìm thấy
 				assist_positions = np.where(x_np[i] == assistant_token_id)[0]
 				if len(assist_positions) > 0:
 					first_assist = int(assist_positions[0])
@@ -235,12 +229,10 @@ def _apply_sft_mask(x_row: np.ndarray, y_row: np.ndarray, assistant_token_id: in
 
 class MixtureTokenDataset:
 	"""
-	Trộn nhiều nguồn dữ liệu đã token hoá (`[[data.sources]]`) theo trọng số, kiểu
-	Megatron/Llama data-blend:
-	  1. Chọn nguồn theo xác suất ∝ trọng số (có thể đổi theo `[[data.phases]]`).
-	  2. Chọn shard trong nguồn ∝ số token của shard.
-	  3. Cắt ngẫu nhiên một đoạn `seq_len + 1` token (tài liệu được đóng gói, ngăn bởi <|eos|>).
-	Mỗi rank (DDP/FSDP) dùng seed riêng → không trùng mẫu giữa các GPU.
+	Blends multiple tokenized sources (`[[data.sources]]`) according to sampling weights:
+	  1. Select source proportionally to active weight.
+	  2. Select shard within source proportionally to token count.
+	  3. Randomly slice `seq_len + 1` tokens.
 	"""
 
 	def __init__(self, cfg: FullConfig, split: str = "train") -> None:
@@ -261,7 +253,6 @@ class MixtureTokenDataset:
 			base_dir = cfg.data.cache_path / src.name
 			shards = meta["splits"].get(split) or []
 			if not shards or sum(s["num_tokens"] for s in shards) < min_len:
-				# Nguồn quá nhỏ để tách val → dùng chung shard train cho val
 				shards = meta["splits"].get("train") or []
 			arrays, sizes = [], []
 			for s in shards:
@@ -271,7 +262,7 @@ class MixtureTokenDataset:
 				arrays.append(np.memmap(str(path), dtype=dtype, mode="r", shape=(s["num_tokens"],)))
 				sizes.append(s["num_tokens"])
 			if not arrays:
-				print(f"[Data] Bỏ qua nguồn '{src.name}': không đủ {min_len} token cho split '{split}'.")
+				print(f"[Data] Skipping source '{src.name}': insufficient tokens for split '{split}'.")
 				continue
 			sizes_np = np.asarray(sizes, dtype=np.float64)
 			self.pools.append(
@@ -285,8 +276,8 @@ class MixtureTokenDataset:
 
 		if not self.pools:
 			raise RuntimeError(
-				f"Không có nguồn dữ liệu hợp lệ cho stage '{cfg.training.stage}' / split '{split}'. "
-				"Kiểm tra [[data.sources]] trong config.toml."
+				f"No valid data sources found for stage '{cfg.training.stage}' / split '{split}'. "
+				"Check [[data.sources]] in config.toml."
 			)
 		self.total_tokens = sum(p["num_tokens"] for p in self.pools)
 		self.set_progress(0, max(1, cfg.training.total_steps))
@@ -294,7 +285,7 @@ class MixtureTokenDataset:
 			self.describe()
 
 	def set_progress(self, step: int, total_steps: int) -> None:
-		"""Cập nhật trọng số trộn theo tiến độ (dùng cho `[[data.phases]]`)."""
+		"""Updates source blending probabilities according to progress."""
 		progress = step / max(1, total_steps)
 		w = np.asarray(
 			self.cfg.data.weights_at(progress, [p["source"] for p in self.pools]), dtype=np.float64
@@ -305,13 +296,13 @@ class MixtureTokenDataset:
 		self.source_probs = w / w.sum()
 
 	def describe(self) -> None:
-		print("[Data] Hỗn hợp dữ liệu huấn luyện:")
+		print("[Data] Training dataset blend:")
 		for p, prob in zip(self.pools, self.source_probs):
 			print(
 				f"   - {p['source'].name:<20} type={p['source'].type:<8} "
-				f"token={p['num_tokens']:>14,} | shard={len(p['arrays']):>4} | tỷ lệ lấy mẫu={prob * 100:5.1f}%"
+				f"tokens={p['num_tokens']:>14,} | shards={len(p['arrays']):>4} | sample_prob={prob * 100:5.1f}%"
 			)
-		print(f"   = Tổng: {self.total_tokens:,} token")
+		print(f"   = Total: {self.total_tokens:,} tokens")
 
 	def __len__(self) -> int:
 		return max(1, self.total_tokens // self.seq_len)

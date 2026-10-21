@@ -1,17 +1,16 @@
 """
-Đọc nguồn dữ liệu thô & Token hoá thành shard nhị phân (Data Ingestion Pipeline)
-================================================================================
-Mỗi nguồn trong `[[data.sources]]` được đọc theo kiểu streaming (không nạp hết vào RAM),
-token hoá theo lô bằng bộ Tokenizer Rust đa luồng, rồi ghi ra các shard `np.memmap`:
+Data Ingestion & Binary Token Sharding Pipeline
+===============================================
+Streams raw corpora from declared `[[data.sources]]` (avoiding high memory consumption),
+tokenizes batches using high-throughput Rust tokenizers, and writes shards into `np.memmap`:
 
-    data/cache/<tên_nguồn>/
-        meta.json               # dấu vân tay cấu hình + thống kê shard
-        train_00000.bin         # uint16 (vocab <= 65535) hoặc uint32 (vocab lớn)
+    data/cache/<source_name>/
+        meta.json               # configuration fingerprint & shard statistics
+        train_00000.bin         # uint16 (vocab <= 65535) or uint32 (large vocab)
         train_00001.bin
         val_00000.bin
 
-Cache tự động vô hiệu khi cấu hình nguồn hoặc tokenizer thay đổi (so khớp `fingerprint`).
-Định dạng shard phẳng này mở rộng được tới hàng nghìn tỷ token và dùng chung cho mọi quy mô mô hình.
+Cache automatically invalidates whenever source configuration or tokenizer changes.
 """
 
 from __future__ import annotations
@@ -34,12 +33,12 @@ META_VERSION = 1
 
 
 def select_token_dtype(vocab_size: int) -> np.dtype:
-	"""uint16 cho vocab <= 65535, uint32 cho vocab lớn (mô hình 1B – frontier)."""
+	"""uint16 for vocab <= 65535, uint32 for large frontier vocabularies."""
 	return np.dtype(np.uint16) if vocab_size <= 65535 else np.dtype(np.uint32)
 
 
 # --------------------------------------------------------------------------- #
-# Đọc tài liệu thô
+# Raw document reading
 # --------------------------------------------------------------------------- #
 
 def _expand_paths(path_spec: Any) -> List[Path]:
@@ -61,7 +60,7 @@ class _SafeDict(dict):
 
 
 def _render_messages(messages: List[Dict[str, Any]]) -> str:
-	"""Định dạng hội thoại kiểu OpenAI `messages=[{role, content}]` sang thẻ đặc biệt của dự án."""
+	"""Formats OpenAI-style `messages=[{role, content}]` into chat special tokens."""
 	parts: List[str] = []
 	for m in messages:
 		role = str(m.get("role", "user")).lower()
@@ -115,7 +114,7 @@ def _iter_parquet(src: DataSourceConfig) -> Iterator[str]:
 	try:
 		import pyarrow.parquet as pq
 	except ImportError as exc:
-		raise ImportError(f"Nguồn '{src.name}' kiểu parquet cần: pip install pyarrow") from exc
+		raise ImportError(f"Source '{src.name}' with parquet type requires: pip install pyarrow") from exc
 	for f in _expand_paths(src.path):
 		pf = pq.ParquetFile(str(f))
 		for batch in pf.iter_batches(batch_size=4096):
@@ -127,7 +126,7 @@ def _iter_hf(src: DataSourceConfig) -> Iterator[str]:
 	try:
 		from datasets import load_dataset
 	except ImportError as exc:
-		raise ImportError(f"Nguồn '{src.name}' kiểu hf cần: pip install datasets") from exc
+		raise ImportError(f"Source '{src.name}' with hf type requires: pip install datasets") from exc
 	ds = load_dataset(
 		src.hf_name,
 		name=src.hf_config or None,
@@ -150,7 +149,7 @@ READERS = {
 def iter_documents(src: DataSourceConfig) -> Iterator[str]:
 	reader = READERS.get(src.type.lower())
 	if reader is None:
-		raise ValueError(f"Kiểu nguồn '{src.type}' không hỗ trợ. Chọn: {', '.join([*READERS, 'bin'])}")
+		raise ValueError(f"Unsupported source type '{src.type}'. Choose from: {', '.join([*READERS, 'bin'])}")
 	count = 0
 	for doc in reader(src):
 		if len(doc) < max(1, src.min_chars):
@@ -162,7 +161,7 @@ def iter_documents(src: DataSourceConfig) -> Iterator[str]:
 
 
 # --------------------------------------------------------------------------- #
-# Ghi shard
+# Shard Writing
 # --------------------------------------------------------------------------- #
 
 class _ShardWriter:
@@ -228,11 +227,11 @@ def load_source_meta(src: DataSourceConfig, cfg: FullConfig) -> Optional[Dict[st
 
 
 def _register_bin_source(src: DataSourceConfig, cfg: FullConfig) -> Dict[str, Any]:
-	"""Nguồn `bin`: dùng trực tiếp các shard token có sẵn (tệp có 'val' trong tên → tập val)."""
+	"""Registers existing pre-tokenized binary files directly."""
 	dtype = select_token_dtype(cfg.model.vocab_size) if src.bin_dtype == "auto" else np.dtype(src.bin_dtype)
 	files = _expand_paths(src.path)
 	if not files:
-		raise FileNotFoundError(f"Nguồn bin '{src.name}' không tìm thấy tệp nào khớp: {src.path}")
+		raise FileNotFoundError(f"Binary source '{src.name}' found no matching files at: {src.path}")
 	meta: Dict[str, Any] = {"dtype": dtype.name, "splits": {"train": [], "val": []}, "external": True}
 	for f in files:
 		split = "val" if "val" in f.name.lower() else "train"
@@ -241,7 +240,7 @@ def _register_bin_source(src: DataSourceConfig, cfg: FullConfig) -> Dict[str, An
 
 
 def prepare_source(src: DataSourceConfig, cfg: FullConfig, force: bool = False) -> Dict[str, Any]:
-	"""Token hoá một nguồn thành shard (bỏ qua nếu cache còn hợp lệ). Trả về meta."""
+	"""Tokenizes data source into binary shards (skips if cache is valid). Returns metadata."""
 	if src.type.lower() == "bin":
 		return _register_bin_source(src, cfg)
 
@@ -250,7 +249,7 @@ def prepare_source(src: DataSourceConfig, cfg: FullConfig, force: bool = False) 
 		if cached is not None:
 			return cached
 
-	from tokenizer.build_tokenizer import Tokenizer  # import trễ để tránh vòng lặp
+	from tokenizer.build_tokenizer import Tokenizer
 
 	out_dir = cfg.data.cache_path / src.name
 	out_dir.mkdir(parents=True, exist_ok=True)
@@ -290,7 +289,7 @@ def prepare_source(src: DataSourceConfig, cfg: FullConfig, force: bool = False) 
 			num_docs += len(batch)
 			batch = []
 			print(
-				f"\r[Data:{src.name}] {num_docs:,} tài liệu | {writers['train'].total:,} token train",
+				f"\r[Data:{src.name}] {num_docs:,} documents | {writers['train'].total:,} train tokens",
 				end="",
 				flush=True,
 			)
@@ -316,7 +315,7 @@ def prepare_source(src: DataSourceConfig, cfg: FullConfig, force: bool = False) 
 	n_train = sum(s["num_tokens"] for s in meta["splits"]["train"])
 	n_val = sum(s["num_tokens"] for s in meta["splits"]["val"])
 	print(
-		f"\r[Data:{src.name}] Xong: {num_docs:,} tài liệu → {n_train:,} token train / {n_val:,} token val "
+		f"\r[Data:{src.name}] Finished: {num_docs:,} documents -> {n_train:,} train tokens / {n_val:,} val tokens "
 		f"({time.perf_counter() - t0:.1f}s)"
 	)
 	return meta

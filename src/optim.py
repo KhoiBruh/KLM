@@ -1,11 +1,10 @@
 """
-Bộ tối ưu lai HybridMuonAdamW & Lịch trình tốc độ học WSD (Warmup - Stable - Decay)
-===================================================================================
-- Sử dụng thuật toán Muon (MomentUm Orthogonalized by Newton-Schulz) cho các ma trận
-  trọng số ẩn 2D (Attention, SwiGLU MLP, ShortConv quy về 2D, MTP).
-- Sử dụng AdamW cho tầng Embedding, LM Head (Weight Tying), RMSNorm và DenseFormer alphas.
-- Tích hợp hệ số căn chỉnh độ lớn RMS theo kích thước ma trận giúp mở rộng mượt mà từ
-  <10M lên tới quy mô nhiều tỷ tham số (1B - 7B+).
+HybridMuonAdamW Optimizer & WSD (Warmup - Stable - Decay) Scheduler
+===================================================================
+- Employs the Muon algorithm (MomentUm Orthogonalized by Newton-Schulz) for 2D hidden
+  weight matrices (Attention projections, SwiGLU FFN).
+- Employs AdamW for Embeddings, LM Head, and RMSNorm scale weights.
+- Incorporates matrix-size RMS scaling for smooth scaling from <10M up to 7B+ parameters.
 """
 
 from __future__ import annotations
@@ -26,18 +25,17 @@ def zeropower_via_newtonschulz5(
 	eps: float = 1e-7
 ) -> torch.Tensor:
 	"""
-	Trực giao hóa ma trận Gradient 2D `G` bằng đa thức Newton-Schulz bậc 5 trên `bfloat16`.
-	Xấp xỉ U @ V^T của phân rã SVD(G) mà không cần gọi hàm SVD đắt đỏ.
+	Orthogonalizes 2D gradient matrix `G` using 5th-order Newton-Schulz iterations on `bfloat16`.
+	Approximates U @ V^T from SVD(G) without computing expensive singular value decompositions.
 	"""
 	if G.ndim < 2:
-		raise ValueError(f"Newton-Schulz yêu cầu tensor >= 2 chiều, nhận được {G.ndim} chiều.")
+		raise ValueError(f"Newton-Schulz requires tensor with >= 2 dimensions, got {G.ndim} dims.")
 
 	orig_shape = G.shape
 	if G.ndim > 2:
 		G = G.reshape(G.size(0), -1)
 
 	a, b, c = (3.4445, -4.7750, 2.0315)
-	# Sử dụng bfloat16 để tăng tốc tối đa trên Tensor Cores (hoặc float32 nếu CPU không hỗ trợ tốt)
 	work_dtype = torch.bfloat16 if (G.is_cuda or G.dtype == torch.bfloat16) else torch.float32
 	X = G.to(work_dtype)
 
@@ -61,8 +59,8 @@ def zeropower_via_newtonschulz5(
 
 class Muon(Optimizer):
 	"""
-	Bộ tối ưu Muon thuần PyTorch hỗ trợ Nesterov momentum, trực giao hóa Newton-Schulz 5 bước
-	và suy giảm trọng số (Decoupled Weight Decay).
+	Pure PyTorch implementation of the Muon optimizer with Nesterov momentum,
+	5th-order Newton-Schulz orthogonalization, and decoupled weight decay.
 	"""
 
 	def __init__(
@@ -102,7 +100,7 @@ class Muon(Optimizer):
 					continue
 				grad = p.grad
 				if grad.is_sparse:
-					raise RuntimeError("Muon không hỗ trợ sparse gradients.")
+					raise RuntimeError("Muon does not support sparse gradients.")
 
 				state = self.state[p]
 				if len(state) == 0:
@@ -112,12 +110,11 @@ class Muon(Optimizer):
 				buf.mul_(momentum).add_(grad)
 				g_in = grad.add(buf, alpha=momentum) if nesterov else buf
 
-				# Quy ShortConv (D, 1, K) về 2D (D, K) trước khi trực giao hóa
 				g_2d = g_in.reshape(g_in.size(0), -1) if g_in.ndim > 2 else g_in
 				ortho = zeropower_via_newtonschulz5(g_2d, ns_steps)
 				ortho = ortho.reshape_as(p)
 
-				# Căn chỉnh tỷ lệ theo chiều ma trận giúp ổn định khi mở rộng lên quy mô tỷ tham số
+				# Matrix aspect ratio scaling for training stability across scales
 				rows, cols = g_2d.size(0), g_2d.size(1)
 				scale = math.sqrt(max(1.0, rows / max(1, cols)))
 
@@ -137,10 +134,10 @@ def get_wsd_lr_multiplier(
 	min_lr_ratio: float = 0.05
 ) -> float:
 	"""
-	Lịch trình tốc độ học WSD (Warmup - Stable - Decay):
-	- Giai đoạn 1 (Warmup - 3%): Tăng tuyến tính từ 0 lên 1.0.
-	- Giai đoạn 2 (Stable - 82%): Giữ nguyên tốc độ học đỉnh 1.0.
-	- Giai đoạn 3 (Decay - 15%): Suy giảm mượt theo hàm Cosine/Sqrt về `min_lr_ratio`.
+	WSD (Warmup - Stable - Decay) Learning Rate Scheduler:
+	- Phase 1 (Warmup): Linear ramp from 0 to 1.0.
+	- Phase 2 (Stable): Plateau at maximum learning rate 1.0.
+	- Phase 3 (Decay): Smooth cosine decay down to `min_lr_ratio`.
 	"""
 	if total_steps <= 0:
 		return 1.0
@@ -164,10 +161,9 @@ def get_wsd_lr_multiplier(
 
 class HybridMuonAdamW:
 	"""
-	Bộ tối ưu lai quản lý đồng thời:
-	1. `Muon`: Dành cho toàn bộ ma trận 2D ẩn (Attention Q/K/V/O/Gate, MLP SwiGLU, ShortConv quy về 2D, MTP).
-	2. `AdamW`: Dành cho tầng Embedding, LM Head (Weight Tying), RMSNorm và DenseFormer alphas.
-	Hỗ trợ đầy đủ giao diện của `torch.optim.Optimizer` và bộ lập lịch WSD tích hợp sẵn.
+	Hybrid optimizer orchestrating:
+	1. `Muon`: 2D hidden weight matrices (Attention Q/K/V/O, SwiGLU MLP).
+	2. `AdamW`: Embeddings, LM Head, and 1D RMSNorm scale parameters.
 	"""
 
 	def __init__(
@@ -231,10 +227,10 @@ class HybridMuonAdamW:
 		model: nn.Module,
 	) -> Tuple[List[nn.Parameter], List[nn.Parameter], List[nn.Parameter]]:
 		"""
-		Phân loại tự động các tham số độc nhất của mô hình:
-		- Ma trận ẩn 2D (và ShortConv 3D quy về 2D) -> Muon
-		- Embedding / LM Head -> AdamW (có weight decay)
-		- Norm / DenseFormer alphas / Biases (1D) -> AdamW (không weight decay)
+		Classifies model parameters into optimal optimization groups:
+		- 2D hidden matrices -> Muon
+		- Embedding / LM Head -> AdamW (with weight decay)
+		- Norm scales & biases (1D) -> AdamW (without weight decay)
 		"""
 		muon_params: List[nn.Parameter] = []
 		adamw_decay: List[nn.Parameter] = []
@@ -250,9 +246,7 @@ class HybridMuonAdamW:
 			seen_ptrs.add(ptr)
 
 			is_embedding_or_head = ("tok_embeddings" in name) or ("lm_head" in name)
-			is_short_conv = "short_conv" in name and param.ndim == 3
-
-			if not is_embedding_or_head and (param.ndim == 2 or is_short_conv):
+			if not is_embedding_or_head and param.ndim == 2:
 				muon_params.append(param)
 			elif is_embedding_or_head:
 				adamw_decay.append(param)
@@ -271,7 +265,7 @@ class HybridMuonAdamW:
 		return groups
 
 	def update_lr(self, step: int, total_steps: Optional[int] = None) -> float:
-		"""Cập nhật tốc độ học theo lịch trình WSD và trả về hệ số nhân LR hiện tại."""
+		"""Updates learning rates according to WSD schedule and returns current multiplier."""
 		if self.train_cfg is not None:
 			max_steps = total_steps if total_steps is not None else self.train_cfg.total_steps
 			mult = get_wsd_lr_multiplier(
@@ -321,5 +315,5 @@ def build_optimizer(
 	cfg: FullConfig,
 	lr_override: Optional[float] = None,
 ) -> HybridMuonAdamW:
-	"""Hàm tiện ích khởi tạo bộ tối ưu lai HybridMuonAdamW từ cấu hình trung tâm."""
+	"""Utility helper initializing HybridMuonAdamW from configuration."""
 	return HybridMuonAdamW(model, cfg.optimizer, cfg.training, lr_override)

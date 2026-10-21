@@ -1,40 +1,40 @@
 # =============================================================================
-# 4. CẤU HÌNH TẬP DỮ LIỆU & PHỐI TRỘN ĐA NGUỒN (configs/datasets.toml)
+# 4. DATASET & MULTI-SOURCE BLENDING CONFIGURATION (configs/datasets.toml)
 # =============================================================================
-# Mỗi nguồn dữ liệu là một khối [[data.sources]].
-# - Nếu chưa bật nguồn nào cho stage hiện tại -> tự động dùng dữ liệu toán giả lập.
-# - Dữ liệu thô được token hóa 1 lần thành các shard nhị phân (.bin) trong `cache_dir`
-#   (tự động cập nhật lại khi đổi cấu hình nguồn hoặc đổi tokenizer).
-# - Có thể chuẩn bị trước bằng lệnh: python prepare_data.py
+# Each data source is declared as a [[data.sources]] block.
+# - If no sources are enabled for current stage -> fallback to synthetic reasoning data.
+# - Raw corpora are tokenized once into binary shards (.bin) inside `cache_dir`
+#   (automatically regenerated if source configuration or tokenizer changes).
+# - Pre-tokenize ahead of time using: python prepare_data.py
 # =============================================================================
 
 [data]
 cache_dir = "data/cache"
-shard_size_tokens = 100_000_000   # ~200MB/shard (uint16). Quy mô frontier: giữ nguyên, chỉ số shard tăng lên
-val_ratio = 0.005                 # 0.5% tài liệu tách riêng cho tập validation
-append_eos = true                 # Chèn <|eos|> giữa các tài liệu khi đóng gói chuỗi
+shard_size_tokens = 100_000_000   # ~200MB/shard (uint16)
+val_ratio = 0.005                 # 0.5% documents reserved for validation
+append_eos = true                 # Append <|eos|> between documents
 prepend_bos = false
-tokenize_batch_size = 1024        # Số tài liệu mỗi lô khi token hóa bằng Rust đa luồng
-synthetic_fallback = true         # Tự động sinh dữ liệu toán/logic giả lập nếu chưa khai báo nguồn nào
+tokenize_batch_size = 1024        # Batch size for multithreaded Rust tokenizer
+synthetic_fallback = true         # Generate synthetic math/reasoning data if no sources exist
 
 # -----------------------------------------------------------------------------
-# HƯỚNG DẪN CÁC TRƯỜNG CỦA [[data.sources]]:
-# - name          : Tên định danh duy nhất (dùng tạo thư mục cache & tham chiếu ở [[data.phases]])
+# FIELD GUIDE FOR [[data.sources]]:
+# - name          : Unique identifier (used for cache folder & [[data.phases]])
 # - type          : "text" | "jsonl" | "parquet" | "hf" | "bin"
-# - path          : Đường dẫn / glob / danh sách glob (hỗ trợ cả tệp nén .gz)
-# - weight        : Trọng số lấy mẫu (tỷ lệ trộn ∝ weight, độc lập với kích thước bộ dữ liệu)
-# - stages        : Danh sách giai đoạn áp dụng, vd: ["pretrain"], ["sft"], ["pretrain", "sft"]
-# - text_field    : Tên trường văn bản (jsonl/parquet/hf). Nếu có `messages=[{role, content}]` sẽ tự format chat
-# - template      : Mẫu ghép nhiều trường, vd: "<|user|> {question} <|assistant|> {answer}"
-# - doc_separator : Ký tự tách tài liệu cho tệp .txt (vd: "\n\n")
-# - min_chars     : Lọc bỏ các tài liệu quá ngắn
-# - max_docs      : Giới hạn số lượng tài liệu đọc tối đa (0 = không giới hạn)
-# - max_tokens    : Giới hạn tổng số token mã hóa tối đa (0 = không giới hạn)
-# - hf_name, hf_config, hf_split, hf_revision : Tham số khi dùng type = "hf" (cần `pip install datasets`)
-# - enabled       : Đặt false nếu muốn tạm tắt nguồn mà không cần xóa cấu hình
+# - path          : File path / glob / list of globs (supports .gz archives)
+# - weight        : Sampling weight (sampling probability proportional to weight)
+# - stages        : Stages to activate, e.g., ["pretrain"], ["sft"]
+# - text_field    : Field containing text (jsonl/parquet/hf). `messages` formats chat
+# - template      : Multi-field template, e.g. "<|user|> {question} <|assistant|> {answer}"
+# - doc_separator : Document delimiter for .txt files (e.g. "\n\n")
+# - min_chars     : Filter out documents shorter than this threshold
+# - max_docs      : Maximum documents to read (0 = unlimited)
+# - max_tokens    : Maximum tokens to encode (0 = unlimited)
+# - hf_name, hf_config, hf_split, hf_revision : HuggingFace hub parameters
+# - enabled       : Set to false to temporarily disable source without deletion
 # -----------------------------------------------------------------------------
 
-# --- Ví dụ 1: Văn bản thuần (.txt / .md) ---
+# --- Example 1: Plain text files (.txt / .md) ---
 # [[data.sources]]
 # name = "local_text"
 # type = "text"
@@ -44,19 +44,19 @@ synthetic_fallback = true         # Tự động sinh dữ liệu toán/logic gi
 # stages = ["pretrain"]
 # weight = 1.0
 
-# --- Ví dụ 2: Tập dữ liệu từ Hugging Face Hub (Streaming) ---
+# --- Example 2: Hugging Face Hub Dataset (Streaming) ---
 # [[data.sources]]
-# name = "wiki_vi"
+# name = "wiki_en"
 # type = "hf"
 # hf_name = "wikimedia/wikipedia"
-# hf_config = "20231101.vi"
+# hf_config = "20231101.en"
 # hf_split = "train"
 # text_field = "text"
 # max_tokens = 200_000_000
 # stages = ["pretrain"]
 # weight = 0.5
 
-# --- Ví dụ 3: Tập dữ liệu Parquet quy mô lớn (FineWeb-Edu / Cosmopedia) ---
+# --- Example 3: Parquet Datasets (FineWeb-Edu / Cosmopedia) ---
 # [[data.sources]]
 # name = "fineweb_edu"
 # type = "parquet"
@@ -66,7 +66,7 @@ synthetic_fallback = true         # Tự động sinh dữ liệu toán/logic gi
 # stages = ["pretrain"]
 # weight = 0.4
 
-# --- Ví dụ 4: Tập dữ liệu SFT / Toán học suy luận CoT (.jsonl / .jsonl.gz) ---
+# --- Example 4: SFT / Math Reasoning CoT Dataset (.jsonl / .jsonl.gz) ---
 # [[data.sources]]
 # name = "math_cot_sft"
 # type = "jsonl"
@@ -75,7 +75,7 @@ synthetic_fallback = true         # Tự động sinh dữ liệu toán/logic gi
 # stages = ["sft"]
 # weight = 1.0
 
-# --- Ví dụ 5: Các shard nhị phân (.bin) đã mã hóa sẵn từ dự án khác ---
+# --- Example 5: Pre-tokenized binary shards (.bin) ---
 # [[data.sources]]
 # name = "external_bins"
 # type = "bin"
@@ -85,14 +85,14 @@ synthetic_fallback = true         # Tự động sinh dữ liệu toán/logic gi
 # weight = 0.1
 
 # -----------------------------------------------------------------------------
-# LỊCH TRÌNH ĐỔI TỶ LỆ TRỘN THEO TIẾN ĐỘ (DATA CURRICULUM / ANNEALING - TÙY CHỌN)
-# Áp dụng phase đầu tiên có `progress < until` (với progress = step / total_steps).
-# Rất hữu ích để tăng tỷ trọng dữ liệu chất lượng cao (toán, sách, code) ở giai đoạn WSD Decay.
+# DYNAMIC DATA BLENDING SCHEDULE (DATA ANNEALING / CURRICULUM - OPTIONAL)
+# Applies the first phase where `progress < until` (progress = step / total_steps).
+# Useful for increasing high-quality reasoning/math/code weights during WSD decay.
 # -----------------------------------------------------------------------------
 # [[data.phases]]
 # until = 0.85
-# weights = { wiki_vi = 0.6, fineweb_edu = 0.4, external_bins = 0.0 }
+# weights = { wiki_en = 0.6, fineweb_edu = 0.4, external_bins = 0.0 }
 #
 # [[data.phases]]
 # until = 1.0
-# weights = { wiki_vi = 0.2, fineweb_edu = 0.3, external_bins = 0.5 }
+# weights = { wiki_en = 0.2, fineweb_edu = 0.3, external_bins = 0.5 }

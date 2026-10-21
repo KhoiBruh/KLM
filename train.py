@@ -1,10 +1,11 @@
 """
-Kịch bản Huấn luyện LLaDA (Large Language Diffusion with Masking)
+LLaDA Training Pipeline (Large Language Diffusion with Masking)
 ===============================================================
-- Tự động nạp cấu hình từ `config.toml` tại thư mục gốc dự án.
-- Huấn luyện theo cơ chế Masked Generative Modeling (Discrete Diffusion):
-  Lấy mẫu chuỗi sạch x_0 -> mask một tỷ lệ token ngẫu nhiên x_t -> tối ưu Masked Cross-Entropy.
-- Tương thích từ GPU nhỏ (RTX 3050 4GB) tới cụm GPU lớn với DDP/FSDP, AMP và bộ tối ưu Muon+AdamW.
+- Automatically loads configuration from root `config.toml`.
+- Trains under discrete Masked Generative Modeling (Diffusion):
+  Sample clean sequences x_0 -> mask random tokens to create noisy x_t -> optimize Masked Cross-Entropy.
+- Scales from edge devices (RTX 3050 4GB) to distributed cloud clusters (DDP/FSDP),
+  utilizing Mixed Precision (AMP) and the hybrid Muon+AdamW optimizer.
 """
 
 from __future__ import annotations
@@ -34,7 +35,7 @@ from src.rl_env import GRPOTrainer
 from tokenizer.build_tokenizer import Tokenizer
 
 
-def set_global_seed(seed: int):
+def set_global_seed(seed: int) -> None:
 	random.seed(seed)
 	np.random.seed(seed)
 	torch.manual_seed(seed)
@@ -43,7 +44,7 @@ def set_global_seed(seed: int):
 
 
 def resolve_device(cfg: FullConfig) -> Tuple[torch.device, torch.dtype, bool]:
-	"""Tự động phát hiện GPU/CPU và kiểu dữ liệu AMP tối ưu."""
+	"""Detects available hardware (CUDA/CPU) and selects optimal AMP dtype."""
 	req_device = cfg.project.device.lower()
 	if req_device.startswith("cuda") and torch.cuda.is_available():
 		local_rank = int(os.environ.get("LOCAL_RANK", "0"))
@@ -68,7 +69,7 @@ def wrap_distributed_or_compile(
 	cfg: FullConfig,
 	device: torch.device,
 ) -> nn.Module:
-	"""Hỗ trợ mở rộng đa GPU qua DDP / FSDP và torch.compile."""
+	"""Wraps model with DDP / FSDP and optionally enables torch.compile."""
 	wrapped: nn.Module = model
 	world_size = int(os.environ.get("WORLD_SIZE", "1"))
 	strategy = cfg.training.distributed_strategy.lower()
@@ -92,9 +93,9 @@ def wrap_distributed_or_compile(
 	if cfg.project.compile and hasattr(torch, "compile") and device.type == "cuda":
 		try:
 			wrapped = torch.compile(wrapped, mode="max-autotune")  # type: ignore[assignment]
-			print("[Compile] Đã kích hoạt torch.compile(mode='max-autotune').")
+			print("[Compile] Activated torch.compile(mode='max-autotune').")
 		except Exception as exc:
-			print(f"[Compile] Bỏ qua torch.compile (fallback về eager mode): {exc}")
+			print(f"[Compile] Skipping torch.compile (fallback to eager mode): {exc}")
 
 	return wrapped
 
@@ -107,8 +108,8 @@ def diffusion_mask(
 	assistant_token_id: int = 5,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, float]:
 	"""
-	Tạo nhiễu cho chuỗi sạch theo nguyên lý LLaDA:
-	Lấy mẫu tỷ lệ mask r ~ [r_min, r_max], thay thế ngẫu nhiên các token bằng `mask_token_id`.
+	Applies masking noise according to LLaDA principles:
+	Samples masking ratio r ~ [r_min, r_max], randomly replaces tokens with `mask_token_id`.
 	"""
 	bsz, seq_len = clean_tokens.shape
 	device = clean_tokens.device
@@ -117,24 +118,24 @@ def diffusion_mask(
 	schedule = getattr(cfg.training, "noise_schedule", "uniform")
 
 	if schedule == "cosine":
-		u = torch.rand(bsz, 1, device)
+		u = torch.rand(bsz, 1, device=device)
 		r = torch.cos(u * (math.pi / 2.0)).clamp(min_ratio, max_ratio)
 	else:
-		r = torch.empty(bsz, 1, device).uniform_(min_ratio, max_ratio)
+		r = torch.empty(bsz, 1, device=device).uniform_(min_ratio, max_ratio)
 
 	mean_ratio = float(r.mean().item())
-	rand_matrix = torch.rand(bsz, seq_len, device)
+	rand_matrix = torch.rand(bsz, seq_len, device=device)
 	mask = rand_matrix < r
 
-	# Đảm bảo mỗi dòng có ít nhất 1 token bị mask
+	# Ensure at least one token is masked per row
 	zero_mask = mask.sum(1) == 0
 	if zero_mask.any():
 		num_zeros = int(zero_mask.sum().item())
-		rand_pos = torch.randint(0, seq_len, (num_zeros,), device)
+		rand_pos = torch.randint(0, seq_len, (num_zeros,), device=device)
 		mask[zero_mask, rand_pos] = True
 
 	if is_sft:
-		# Giữ nguyên phần prompt câu hỏi, chỉ mask câu trả lời sau thẻ <|assistant|>
+		# Preserve prompt tokens, only mask completion tokens after <|assistant|>
 		for b in range(bsz):
 			assist_pos = (clean_tokens[b] == assistant_token_id).nonzero(as_tuple=True)[0]
 			if len(assist_pos) > 0:
@@ -164,7 +165,7 @@ def evaluate_validation_loss(
 		noisy_input, targets, mask, _ = diffusion_mask(
 			clean_tokens, cfg, mask_token_id
 		)
-		with torch.amp.autocast(device.type, amp_dtype, use_amp):
+		with torch.amp.autocast(device_type=device.type, dtype=amp_dtype, enabled=use_amp):
 			out = model(input_ids=noisy_input, targets=targets, mask_indices=mask)
 			if out.loss is not None:
 				losses.append(float(out.loss.item()))
@@ -209,21 +210,21 @@ def train(
 	param_stats = count_params(base_model)
 
 	print("=" * 78)
-	print(f" KHỞI ĐỘNG HUẤN LUYỆN LLADA DIFFUSION: {cfg.project.name.upper()} | STAGE: {cfg.training.stage.upper()}")
+	print(f" LAUNCHING LLADA DIFFUSION TRAINING: {cfg.project.name.upper()} | STAGE: {cfg.training.stage.upper()}")
 	print("=" * 78)
-	print(f" - Thiết bị chạy         : {device} (AMP={use_amp}, dtype={amp_dtype})")
+	print(f" - Hardware device       : {device} (AMP={use_amp}, dtype={amp_dtype})")
 	print(
-		f" - Quy mô kiến trúc      : d_model={cfg.model.d_model}, "
+		f" - Architecture scale     : d_model={cfg.model.d_model}, "
 		f"n_layers={cfg.model.n_layers}, "
 		f"n_heads={cfg.model.n_heads}/{cfg.model.n_kv_heads}, "
 		f"d_ff={cfg.model.d_ff}, vocab={cfg.model.vocab_size}"
 	)
-	print(f" - Chế độ Attention      : Bidirectional (is_causal={cfg.model.is_causal})")
-	print(f" - Mask Token ID         : {tokenizer.mask_id} (<|mask|>)")
+	print(f" - Attention mode         : Bidirectional (is_causal={cfg.model.is_causal})")
+	print(f" - Mask Token ID          : {tokenizer.mask_id} (<|mask|>)")
 	print(
-		f" - Tổng số tham số       : {param_stats['training_params']:,} ({param_stats['training_params'] / 1e6:.3f}M)"
+		f" - Total parameters       : {param_stats['training_params']:,} ({param_stats['training_params'] / 1e6:.3f}M)"
 	)
-	print(f" - Định dạng Checkpoint  : Safetensors ({cfg.project.checkpoint_path})")
+	print(f" - Checkpoint storage     : Safetensors ({cfg.project.checkpoint_path})")
 	print("=" * 78)
 
 	stage = cfg.training.stage.lower()
@@ -234,7 +235,7 @@ def train(
 		f"AdamW (Emb/Norm/1D): {optimizer.adamw_param_count:,} params"
 	)
 
-	# Khôi phục từ checkpoint .safetensors nếu có
+	# Restore from existing safetensors checkpoint if available
 	ckpt_dir = cfg.project.checkpoint_path
 	start_step = 0
 	if (
@@ -244,9 +245,9 @@ def train(
 		try:
 			resume_info = load_checkpoint(base_model, ckpt_dir, device, optimizer)
 			start_step = int(resume_info.get("step", 0))
-			print(f"[Checkpoint] Đã khôi phục trọng số từ '{resume_info['loaded_from']}' (step={start_step}).")
+			print(f"[Checkpoint] Restored weights from '{resume_info['loaded_from']}' (step={start_step}).")
 		except Exception as exc:
-			print(f"[Checkpoint] Khởi tạo trọng số mới (bỏ qua checkpoint cũ: {exc}).")
+			print(f"[Checkpoint] Initializing fresh weights (skipped checkpoint: {exc}).")
 
 	model = wrap_distributed_or_compile(base_model, cfg, device)
 	scaler = torch.amp.GradScaler(
@@ -278,11 +279,11 @@ def train(
 
 			if step % cfg.training.save_interval == 0 or step == start_step + total_rl_steps:
 				saved_path = save_checkpoint(model, ckpt_dir, step, optimizer, cfg=cfg)
-				print(f"[Safetensors] Đã lưu checkpoint GRPO tại: {saved_path}")
+				print(f"[Safetensors] Saved GRPO checkpoint to: {saved_path}")
 
 		return
 
-	# Pre-training hoặc SFT với Masked Generative Modeling (LLaDA)
+	# Pre-training or SFT with Masked Generative Modeling (LLaDA)
 	train_dataset = MemmapTokenDataset(cfg, "train")
 	val_dataset = MemmapTokenDataset(cfg, "val")
 
@@ -363,39 +364,39 @@ def train(
 					model, ckpt_dir, step, optimizer,
 					{"stage": stage, "lr_mult": lr_mult}, cfg
 				)
-				print(f"  >>> [Safetensors] Đã lưu checkpoint tại: {saved_path}")
+				print(f"  >>> [Safetensors] Saved checkpoint to: {saved_path}")
 
 	except KeyboardInterrupt:
-		print(f"\n[Dừng khẩn cấp] Phát hiện Ctrl+C! Đang lưu checkpoint tại step {step}...")
+		print(f"\n[Interrupted] Detected Ctrl+C! Saving emergency checkpoint at step {step}...")
 		saved_path = save_checkpoint(
 			model, ckpt_dir, step, optimizer,
 			{"stage": stage, "lr_mult": lr_mult}, cfg
 		)
-		print(f"[Safetensors] Đã lưu checkpoint an toàn tại: {saved_path}")
+		print(f"[Safetensors] Safely saved checkpoint to: {saved_path}")
 
 
 def parse_args() -> argparse.Namespace:
 	parser = argparse.ArgumentParser(
-		description="Huấn luyện mô hình LLaDA Diffusion."
+		description="Trains LLaDA Diffusion model."
 	)
-	parser.add_argument("--config", type=str, default="config.toml", help="Đường dẫn tới config.toml")
+	parser.add_argument("--config", type=str, default="config.toml", help="Path to config.toml")
 	parser.add_argument(
 		"--stage",
 		type=str,
 		default=None,
 		choices=["pretrain", "sft", "grpo"],
-		help="Ghi đè giai đoạn huấn luyện (pretrain, sft, grpo)",
+		help="Overrides training stage (pretrain, sft, grpo)",
 	)
-	parser.add_argument("--steps", type=int, default=None, help="Ghi đè tổng số bước chạy")
+	parser.add_argument("--steps", type=int, default=None, help="Overrides total training steps")
 	parser.add_argument(
 		"--scale",
 		type=str,
 		default=None,
 		choices=["custom", "10m", "100m", "500m", "1b", "3b", "7b"],
-		help="Chuyển nhanh sang cấu hình quy mô lớn",
+		help="Quickly switches scale preset",
 	)
-	parser.add_argument("--batch-size", type=int, default=None, help="Ghi đè micro_batch_size")
-	parser.add_argument("--grad-accum", type=int, default=None, help="Ghi đè grad_accum_steps")
+	parser.add_argument("--batch-size", type=int, default=None, help="Overrides micro_batch_size")
+	parser.add_argument("--grad-accum", type=int, default=None, help="Overrides grad_accum_steps")
 	return parser.parse_args()
 
 

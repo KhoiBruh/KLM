@@ -1,14 +1,14 @@
 # =============================================================================
-# 1. CẤU HÌNH DỰ ÁN & MÔI TRƯỜNG THỰC THI (configs/project.toml)
+# 1. PROJECT & EXECUTION ENVIRONMENT CONFIGURATION (configs/project.toml)
 # =============================================================================
 
 [project]
 name = "klm-10m"
 seed = 42
-device = "cuda"               # Tự động fallback về "cpu" nếu không có GPU
-dtype = "bfloat16"            # Hỗ trợ: "float32", "float16", "bfloat16", "fp8"
-compile = true                # Bật torch.compile(mode="max-autotune")
+device = "cuda"               # Automatically falls back to "cpu" if CUDA is unavailable
+dtype = "bfloat16"            # Supported: "float32", "float16", "bfloat16", "fp8"
+compile = true                # Enable torch.compile(mode="max-autotune")
 checkpoint_dir = "checkpoints"
 tokenizer_dir = "tokenizer"
-save_format = "safetensors"    # Lưu trọng số chuẩn .safetensors (mmap 0-copy)
-max_shard_size_gb = 4.0       # Tự động tách thành nhiều shard .safetensors khi mô hình vượt ngưỡng (dùng cho 1B - 7B+)
+save_format = "safetensors"    # Save weights in standard .safetensors (zero-copy mmap)
+max_shard_size_gb = 4.0       # Auto-shard safetensors when model exceeds threshold (1B - 7B+)

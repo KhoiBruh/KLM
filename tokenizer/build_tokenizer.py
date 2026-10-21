@@ -1,7 +1,8 @@
 """
-Kịch bản huấn luyện bộ từ điển Byte-Level BPE tùy chỉnh với cơ chế tách rời từng chữ số (0-9)
-giúp mô hình SLM (<10M / 100M / 1B+) đạt điểm tối đa trên các bài toán số học (ArithMark-3, GSM8K).
-Cung cấp lớp wrapper `Tokenizer` gọn nhẹ dùng chung cho toàn bộ dự án.
+Custom Byte-Level BPE Tokenizer with Separated Digits (0-9) (`tokenizer/build_tokenizer.py`)
+=============================================================================================
+Enables SLMs (<10M / 100M / 1B+) to achieve high accuracy on arithmetic benchmarks (ArithMark-3, GSM8K).
+Provides a lightweight unified `Tokenizer` wrapper class used throughout the project.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ import sys
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Union, Any
 
-# Đảm bảo có thể import `src` khi chạy trực tiếp `python tokenizer/build_tokenizer.py`
+# Ensure src can be imported when running `python tokenizer/build_tokenizer.py` directly
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
 	sys.path.insert(0, str(PROJECT_ROOT))
@@ -42,22 +43,22 @@ SPECIAL_TOKENS: List[str] = [
 
 def _default_training_corpus() -> List[str]:
 	"""
-	Tập ngữ liệu khởi tạo đa dạng (Toán học, Suy luận Logic, Tiếng Việt, Tiếng Anh, Code)
-	được sử dụng khi người dùng chưa cung cấp tệp văn bản ngoài, giúp xây dựng đầy đủ
-	bảng chữ cái byte-level, các chữ số 0-9 độc lập và từ vựng suy luận cốt lõi.
+	Diverse initial training corpus (Mathematics, Logic Reasoning, Vietnamese, English, Code)
+	used when no external text file is provided, building a complete byte-level alphabet,
+	isolated digits 0-9, and core reasoning vocabulary.
 	"""
 	samples: List[str] = [
 		"0 1 2 3 4 5 6 7 8 9 10 11 12 15 20 25 50 100 256 512 1024 2048 4096 9999",
 		"+ - * / = ( ) [ ] { } < > <= >= != == % ^ . , : ; ? !",
-		"<|user|> Tính giá trị biểu thức: (125 + 375) * 4 - 200 <|assistant|> <|think|> Bước 1: 125 + 375 = 500. Bước 2: 500 * 4 = 2000. Bước 3: 2000 - 200 = 1800. <|/think|> <|answer|> 1800 <|eos|>",
+		"<|user|> Compute: (125 + 375) * 4 - 200 <|assistant|> <|think|> Step 1: 125 + 375 = 500. Step 2: 500 * 4 = 2000. Step 3: 2000 - 200 = 1800. <|/think|> <|answer|> 1800 <|eos|>",
 		"<|user|> Solve for x: 3 * x + 15 = 48 <|assistant|> <|think|> Subtract 15 from both sides: 3 * x = 33. Divide by 3: x = 11. <|/think|> <|answer|> 11 <|eos|>",
-		"<|user|> Tìm số tiếp theo trong dãy số: 2, 5, 8, 11, 14, ? <|assistant|> <|think|> Hiệu hai số liên tiếp là 5 - 2 = 3. Vậy số tiếp theo là 14 + 3 = 17. <|/think|> <|answer|> 17 <|eos|>",
-		"The quick brown fox jumps over the lazy dog. Mô hình ngôn ngữ nhỏ tối tân với kiến trúc Gated GQA, QK-Norm, ShortConv, DenseFormer và Multi-Token Prediction.",
+		"<|user|> Find the next number in the sequence: 2, 5, 8, 11, 14, ? <|assistant|> <|think|> The common difference is 5 - 2 = 3. Therefore the next number is 14 + 3 = 17. <|/think|> <|answer|> 17 <|eos|>",
+		"The quick brown fox jumps over the lazy dog. Compact language model with LLaDA masked diffusion and GQA.",
 		"def solve_math(a: int, b: int) -> int:\n    result = (a * b) + (a - b)\n    return result\n",
 		"Step 1: Analyze the problem carefully. Step 2: Compute intermediate arithmetic values digit by digit. Step 3: Verify the final answer.",
-		"Therefore, the final answer is verified. Vậy đáp án chính xác cuối cùng là:",
+		"Therefore, the final answer is verified. Concluding answer:",
 	]
-	# Mở rộng tổ hợp số học để BPE học tốt các cấu trúc toán học nhưng vẫn giữ từng chữ số tách rời
+	# Expand arithmetic combinations so BPE learns math structures while keeping individual digits separated
 	for a in range(0, 40, 3):
 		for b in range(1, 30, 4):
 			samples.append(
@@ -75,8 +76,8 @@ def build_bpe_tokenizer(
 	cfg: Optional[FullConfig] = None,
 ) -> Path:
 	"""
-	Huấn luyện bộ Byte-Level BPE Tokenizer với `pre_tokenizers.Digits(individual_digits=True)`
-	để tách từng chữ số 0-9 thành các token độc lập, sau đó lưu ra `tokenizer/tokenizer.json`.
+	Train a Byte-Level BPE Tokenizer with `pre_tokenizers.Digits(individual_digits=True)`
+	to separate each digit 0-9 into independent tokens, then save to `tokenizer/tokenizer.json`.
 	"""
 	if cfg is None:
 		cfg = load_config()
@@ -87,7 +88,7 @@ def build_bpe_tokenizer(
 	out_path = out_dir / "tokenizer.json"
 
 	if not HAS_HF_TOKENIZERS:
-		# Fallback an toàn nếu môi trường chưa cài thư viện `tokenizers`
+		# Safe fallback if environment lacks the `tokenizers` library
 		fallback_data = {
 			"type": "fallback_byte_digit_bpe",
 			"vocab_size": target_vocab_size,
@@ -95,14 +96,14 @@ def build_bpe_tokenizer(
 			"individual_digits": True,
 		}
 		out_path.write_text(json.dumps(fallback_data, indent=2, ensure_ascii=False), encoding="utf-8")
-		print(f"[Tokenizer] Đã lưu cấu hình fallback tokenizer tại: {out_path}")
+		print(f"[Tokenizer] Saved fallback tokenizer config to: {out_path}")
 		return out_path
 
-	# Khởi tạo mô hình BPE mức Byte
+	# Initialize Byte-Level BPE model
 	tokenizer = HFTokenizer(models.BPE(unk_token="<|unk|>"))
 	tokenizer.normalizer = normalizers.NFKC()
 
-	# QUAN TRỌNG: Tách rời từng chữ số 0-9 (individual_digits=True) kết hợp ByteLevel
+	# CRITICAL: Separate each digit 0-9 (individual_digits=True) combined with ByteLevel
 	tokenizer.pre_tokenizer = pre_tokenizers.Sequence(
 		[
 			pre_tokenizers.Digits(True),
@@ -135,7 +136,7 @@ def build_bpe_tokenizer(
 
 	tokenizer.save(str(out_path))
 	print(
-		f"[Tokenizer] Đã huấn luyện xong ByteLevel BPE (vocab_size={target_vocab_size}, "
+		f"[Tokenizer] Trained ByteLevel BPE (vocab_size={target_vocab_size}, "
 		f"current_vocab={tokenizer.get_vocab_size()}, individual_digits=True) -> {out_path}"
 	)
 	return out_path
@@ -143,8 +144,8 @@ def build_bpe_tokenizer(
 
 class Tokenizer:
 	"""
-	Lớp Wrapper gọn nhẹ quanh `tokenizer/tokenizer.json` để dùng thống nhất trong toàn dự án.
-	Tự động xây dựng `tokenizer.json` nếu chưa tồn tại và đảm bảo tách rời từng chữ số 0-9.
+	Lightweight wrapper class around `tokenizer/tokenizer.json` used uniformly across the project.
+	Automatically builds `tokenizer.json` if missing and guarantees isolated digits 0-9.
 	"""
 
 	def __init__(
@@ -182,7 +183,7 @@ class Tokenizer:
 					)
 					self._hf_tok = HFTokenizer.from_file(str(self.tokenizer_path))
 
-		# Ánh xạ các token đặc biệt
+		# Map special tokens
 		self.special_token_to_id: Dict[str, int] = {
 			tok: idx for idx, tok in enumerate(SPECIAL_TOKENS)
 		}
@@ -214,7 +215,7 @@ class Tokenizer:
 		add_bos: bool = False,
 		add_eos: bool = False,
 	) -> List[int]:
-		"""Mã hóa chuỗi văn bản thành danh sách ID token (tách từng chữ số 0-9 độc lập)."""
+		"""Encode a text string into a list of token IDs (individual digits 0-9 separated)."""
 		ids: List[int] = []
 		if add_bos:
 			ids.append(self.bos_id)
@@ -223,7 +224,7 @@ class Tokenizer:
 			encoded = self._hf_tok.encode(text).ids
 			ids.extend(int(i) % self.vocab_size for i in encoded)
 		else:
-			# Fallback byte-level đảm bảo mỗi chữ số 0-9 là 1 token riêng biệt
+			# Fallback byte-level ensuring each digit 0-9 is a separate token
 			offset = len(SPECIAL_TOKENS)
 			for b in text.encode("utf-8", errors="replace"):
 				ids.append((b + offset) % self.vocab_size)
@@ -238,14 +239,14 @@ class Tokenizer:
 		add_bos: bool = False,
 		add_eos: bool = False,
 	) -> List[List[int]]:
-		"""Mã hóa hàng loạt chuỗi văn bản tốc độ cao."""
+		"""High-throughput batch encoding for multiple text strings."""
 		if self._hf_tok is not None and not add_bos and not add_eos:
 			batch_enc = self._hf_tok.encode_batch(list(texts))
 			return [[int(i) % self.vocab_size for i in enc.ids] for enc in batch_enc]
 		return [self.encode(t, add_bos=add_bos, add_eos=add_eos) for t in texts]
 
 	def decode(self, token_ids: Iterable[int], skip_special_tokens: bool = True) -> str:
-		"""Giải mã danh sách ID token về chuỗi văn bản."""
+		"""Decode a list of token IDs back into a text string."""
 		clean_ids = [int(t) for t in token_ids]
 		if self._hf_tok is not None:
 			if skip_special_tokens:
@@ -269,15 +270,15 @@ def main() -> None:
 	out_file = build_bpe_tokenizer(cfg=cfg)
 	tok = Tokenizer(out_file, cfg, False)
 
-	# Kiểm thử nhanh tính năng tách rời từng chữ số 0-9
+	# Quick test verifying individual digit separation (0-9)
 	test_expr = "ArithMark-3: 12345 + 67890 = 80235"
 	encoded = tok.encode(test_expr)
 	decoded = tok.decode(encoded)
 	digit_tokens = [tok.encode(str(d)) for d in range(10)]
-	print(f"[Kiểm thử] Chuỗi gốc : {test_expr}")
-	print(f"[Kiểm thử] Token IDs : {encoded} (len={len(encoded)})")
-	print(f"[Kiểm thử] Giải mã   : {decoded}")
-	print(f"[Kiểm thử] Token 0-9 : {digit_tokens} (Mỗi chữ số là 1 token đơn lẻ)")
+	print(f"[Test] Original text  : {test_expr}")
+	print(f"[Test] Token IDs      : {encoded} (len={len(encoded)})")
+	print(f"[Test] Decoded text   : {decoded}")
+	print(f"[Test] Digits 0-9     : {digit_tokens} (Each digit is a single isolated token)")
 
 
 if __name__ == "__main__":

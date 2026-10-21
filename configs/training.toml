@@ -1,33 +1,33 @@
 # =============================================================================
-# 3. CẤU HÌNH HUẤN LUYỆN LLADA DIFFUSION & BỘ TỐI ƯU (configs/training.toml)
+# 3. TRAINING & OPTIMIZATION CONFIGURATION (configs/training.toml)
 # =============================================================================
 
 [optimizer]
-# Lai ghép Muon (cho ma trận 2D ẩn) + AdamW (cho Embedding, Norm, Bias)
+# Hybrid Muon (for 2D hidden weight matrices) + AdamW (for Embeddings, Norms, Biases)
 muon_lr = 0.02
 muon_momentum = 0.95
-muon_ns_steps = 5             # Số bước lặp Newton-Schulz bậc 5 trực giao hóa
+muon_ns_steps = 5             # 5th-order Newton-Schulz orthogonalization steps
 adamw_lr = 0.003
 weight_decay = 0.01
 betas = [0.9, 0.95]
 grad_clip = 1.0
 
 [training]
-stage = "pretrain"            # Chế độ: "pretrain", "sft"
-micro_batch_size = 64         # Tối ưu cho RTX 3050 4GB (~2.6GB VRAM)
-grad_accum_steps = 8          # Global batch = 64 * 8 = 512 chuỗi
+stage = "pretrain"            # Mode: "pretrain", "sft"
+micro_batch_size = 64         # Optimized for RTX 3050 4GB (~2.6GB VRAM)
+grad_accum_steps = 8          # Global batch = 64 * 8 = 512 sequences
 total_steps = 100000
-warmup_ratio = 0.03           # Lịch trình WSD: 3% Warmup -> 82% Stable -> 15% Decay
+warmup_ratio = 0.03           # WSD schedule: 3% Warmup -> 82% Stable -> 15% Decay
 stable_ratio = 0.82
 decay_ratio = 0.15
 
-# Cấu hình Masking Diffusion
-mask_ratio_min = 0.15         # Tỷ lệ mask nhỏ nhất lúc train
-mask_ratio_max = 1.0          # Tỷ lệ mask lớn nhất lúc train
-noise_schedule = "uniform"    # "uniform" hoặc "cosine"
+# Masked Diffusion configuration
+mask_ratio_min = 0.15         # Minimum masking ratio during training
+mask_ratio_max = 1.0          # Maximum masking ratio during training
+noise_schedule = "uniform"    # Noise schedule: "uniform" or "cosine"
 
-gradient_checkpointing = true # Tiết kiệm VRAM
-distributed_strategy = "auto"
+gradient_checkpointing = true # Reduces VRAM footprint
+distributed_strategy = "auto" # "auto", "none", "ddp", "fsdp"
 low_cpu_mem_usage = false
 eval_interval = 1000
 save_interval = 50

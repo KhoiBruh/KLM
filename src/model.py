@@ -1,11 +1,11 @@
 """
-Mô hình trung tâm LLaDA (Large Language Diffusion with Masking)
-==============================================================
-Kiến trúc Transformer 2 chiều (Bidirectional Transformer) tối ưu cho học khuếch tán:
-- Full Bidirectional Attention: Mọi token chú ý lẫn nhau (không dùng Causal Mask).
+Core LLaDA Model (Large Language Diffusion with Masking)
+========================================================
+Bidirectional Transformer architecture optimized for discrete masked diffusion:
+- Full Bidirectional Attention: All tokens attend to each other without causal masking.
 - RoPE 1D + RMSNorm + QK-Norm + SwiGLU MLP.
-- Masked Generative Modeling: Dự đoán token gốc tại các vị trí bị che (mask).
-- LLaDA Sampler: Giải mã khuếch tán bán tự hồi quy dựa trên độ tự tin (Confidence-based Re-masking).
+- Masked Generative Modeling: Predicts clean ground-truth tokens at masked positions.
+- LLaDA Sampler: Semi-autoregressive diffusion decoding with confidence-based remasking.
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ from .layers import (
 
 @dataclass
 class ModelOutput:
-	"""Cấu trúc đầu ra thống nhất của mô hình LLaDA."""
+	"""Unified model output structure for LLaDA."""
 
 	logits: torch.Tensor
 	loss: Optional[torch.Tensor] = None
@@ -52,8 +52,8 @@ class ModelOutput:
 
 class KLMModel(nn.Module):
 	"""
-	Mô hình ngôn ngữ khuếch tán LLaDA (Large Language Diffusion with Masking).
-	Hỗ trợ Masked Cross-Entropy, QK-Norm, Gradient Checkpointing và LLaDA Sampler.
+	LLaDA Discrete Diffusion Language Model.
+	Supports Masked Cross-Entropy, QK-Norm, Gradient Checkpointing, and LLaDA Sampler.
 	"""
 
 	def __init__(self, cfg: Union[FullConfig, ModelConfig]) -> None:
@@ -109,12 +109,12 @@ class KLMModel(nn.Module):
 				nn.init.normal_(module.weight, 0.0, std)
 
 	def tie_weights(self) -> None:
-		"""Khôi phục liên kết trọng số (Weight Tying) sau khi nạp từ Safetensors."""
+		"""Restores weight tying after loading state from safetensors."""
 		if self.cfg.tie_word_embeddings:
 			self.lm_head.weight = self.tok_embeddings.weight
 
 	def export_for_inference(self) -> "KLMModel":
-		"""Chuẩn bị mô hình cho chế độ suy luận / thi đấu."""
+		"""Prepares model for evaluation or production inference."""
 		self.gradient_checkpointing = False
 		self.eval()
 		return self
@@ -128,10 +128,10 @@ class KLMModel(nn.Module):
 		ignore_index: int = -100
 	) -> ModelOutput:
 		"""
-		Forward 2 chiều (Bidirectional) qua mạng LLaDA.
-		- input_ids: Tensor (B, L) chứa chuỗi đã bị mask ngẫu nhiên x_t.
-		- targets: Tensor (B, L) chứa chuỗi gốc x_0 cần phục hồi.
-		- mask_indices: Tensor Boolean (B, L) đánh dấu các vị trí bị mask (True = bị mask).
+		Bidirectional forward pass through LLaDA backbone.
+		- input_ids: Tensor (B, L) containing noisy sequence x_t with mask tokens.
+		- targets: Tensor (B, L) containing ground-truth sequence x_0 to recover.
+		- mask_indices: Boolean Tensor (B, L) indicating masked token positions.
 		"""
 		x = self.tok_embeddings(input_ids)
 
@@ -151,11 +151,11 @@ class KLMModel(nn.Module):
 		if targets is None:
 			return ModelOutput(logits=logits)
 
-		# Xác định mặt nạ các vị trí bị mask nếu chưa được truyền tường minh
+		# Auto-derive mask indices if not provided explicitly
 		if mask_indices is None:
 			mask_indices = input_ids == self.mask_token_id
 
-		# Tính Masked Cross-Entropy Loss (chỉ tính trên các token bị mask)
+		# Compute Masked Cross-Entropy Loss solely over masked positions
 		num_masked = mask_indices.sum()
 		if num_masked > 0:
 			masked_targets = targets.clone()
@@ -192,16 +192,15 @@ class KLMModel(nn.Module):
 		step_callback: Optional[Callable[[int, int, torch.Tensor], None]] = None,
 	) -> torch.Tensor:
 		"""
-		Thuật toán giải mã khuếch tán LLaDA (Confidence-based Masked Diffusion Sampler).
-		- Hỗ trợ cả sinh nối tiếp từ Prompt (infilling / completion) và sinh tự do.
-		- Tại mỗi bước diffusion, mô hình dự đoán đồng thời toàn bộ các vị trí mask,
-		  sau đó unmask dần các token có độ tự tin cao nhất và re-mask các token ít tự tin.
+		LLaDA Diffusion Sampler (Confidence-based Masked Diffusion Decoding).
+		- Supports prompt continuation (infilling / completion) as well as unconditional generation.
+		- Simultaneously predicts all positions, unmasking confident tokens and remasking low-confidence tokens.
 		"""
 		self.eval()
 		total_steps = steps or self.sampling_steps
 		device = next(self.parameters()).device
 
-		# Chuẩn hóa đầu vào prompt
+		# Standardize prompt input
 		if input_ids is not None:
 			prompt = input_ids.to(device)
 		elif prompt_ids is not None:
@@ -212,25 +211,25 @@ class KLMModel(nn.Module):
 		bsz, prompt_len = prompt.shape
 		total_len = prompt_len + gen_length
 
-		# Khởi tạo chuỗi x: giữ nguyên prompt, phần còn lại điền toàn bộ bằng MASK token
+		# Initialize sequence x: preserve prompt tokens, fill remainder with MASK tokens
 		x = torch.full((bsz, total_len), self.mask_token_id, dtype=torch.long, device=device)
 		if prompt_len > 0:
 			x[:, :prompt_len] = prompt
 
-		# Đánh dấu vùng prompt cố định (không bao giờ re-mask prompt)
+		# Mark fixed prompt positions (never remask prompt tokens)
 		is_prompt = torch.zeros((bsz, total_len), dtype=torch.bool, device=device)
 		if prompt_len > 0:
 			is_prompt[:, :prompt_len] = True
 
-		# Vòng lặp khử nhiễu khuếch tán (Diffusion Denoising Steps)
+		# Diffusion denoising iterations
 		for s in range(total_steps):
 			out = self(input_ids=x)
 			logits = out.logits.clone()  # (B, L, V)
 
-			# Cấm mô hình dự đoán ra chính token MASK
+			# Disallow predicting MASK token directly
 			logits[:, :, self.mask_token_id] = -float("inf")
 
-			# Tính xác suất và lấy mẫu token dự đoán
+			# Calculate token probabilities and confidence values
 			if temperature <= 1e-5:
 				pred_tokens = torch.argmax(logits, dim=-1)
 				probs = F.softmax(logits, dim=-1)
@@ -242,17 +241,17 @@ class KLMModel(nn.Module):
 				pred_tokens = torch.multinomial(flat_probs, num_samples=1).view(bsz, total_len)
 				confidence = probs.gather(-1, pred_tokens.unsqueeze(-1)).squeeze(-1)
 
-			# Cập nhật các vị trí đang là mask bằng token vừa dự đoán
+			# Update current mask positions with predicted tokens
 			mask_pos = (x == self.mask_token_id)
 			x = torch.where(mask_pos, pred_tokens, x)
 
-			# Nếu là bước cuối cùng, dừng lại (tất cả token đã được điền)
+			# Final step termination: sequence is completely unmasked
 			if s == total_steps - 1:
 				if step_callback is not None:
 					step_callback(s + 1, total_steps, x.detach())
 				break
 
-			# Đảm bảo tiến trình unmasking tăng đều qua từng bước
+			# Compute target mask ratio for next step
 			progress = (s + 1) / total_steps
 			unmask_target = max(1, math.ceil(progress * gen_length))
 			if remask_schedule == "cosine":
@@ -262,12 +261,11 @@ class KLMModel(nn.Module):
 
 			num_to_mask = max(0, min(gen_length - unmask_target, int(round(mask_ratio * gen_length))))
 
-			# Độ tự tin ở vùng prompt được đặt vô cực để không bao giờ bị re-mask
+			# Prompt tokens have infinite confidence to prevent remasking
 			eff_confidence = confidence.clone()
 			eff_confidence[is_prompt] = float("inf")
 
-			# Re-mask lại num_to_mask token có độ tự tin thấp nhất trong vùng sinh
-			# Để đảm bảo token có độ tự tin thấp nhất sẽ được mô hình xem xét lại ở bước sau
+			# Remask lowest-confidence generated tokens
 			if num_to_mask > 0:
 				for b in range(bsz):
 					gen_confs = eff_confidence[b, prompt_len:]

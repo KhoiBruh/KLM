@@ -1,11 +1,11 @@
 """
-Kịch bản Đánh giá Benchmark, Đếm Tham số Chính xác & Kiểm tra Quy mô Đa tỷ Tham số (`evaluate.py`)
-==================================================================================================
-- Tự động đọc `config.toml` tại thư mục gốc và nạp trọng số `.safetensors` từ `checkpoints/`.
-- Gọi `model.export_for_inference()` để cắt bỏ hoàn toàn nhánh MTP (`mtp_proj`), sau đó in bảng
-  thống kê chi tiết từng nhóm tham số và xác nhận tổng tham số < 10,000,000 (~9.98M cho cấu hình 10M).
-- Đánh giá Perplexity (PPL) và chấm điểm trực tiếp bài test số học kiểu ArithMark-3 trên terminal.
-- Hỗ trợ `--all-scales` để kiểm tra bảng mở rộng quy mô từ <10M lên tới 7B+ tham số.
+Benchmark Evaluation, Parameter Audit & Multi-Billion Scale Verification (`evaluate.py`)
+========================================================================================
+- Automatically parses `config.toml` from the project root and loads `.safetensors` checkpoints.
+- Calls `model.export_for_inference()` and prints a structured parameter audit confirming total
+  unique parameters < 10,000,000 (~9.36M for the 10M competition tier).
+- Evaluates Masked Cross-Entropy Validation Loss, Perplexity (PPL), and ArithMark-3 math sandbox accuracy.
+- Supports `--all-scales` to verify zero-RAM architectural scaling from <10M up to 7B+ parameters.
 """
 
 from __future__ import annotations
@@ -32,15 +32,15 @@ def print_parameter_report(
 	cfg: FullConfig
 ) -> Dict[str, Any]:
 	"""
-	In bảng thống kê tham số trước và sau khi gọi `model.export_for_inference()`.
-	Khẳng định tổng tham số độc nhất < 10,000,000 cho phân khúc 10M.
+	Print parameter breakdown before and after calling `model.export_for_inference()`.
+	Confirm unique parameter total < 10,000,000 for the 10M configuration tier.
 	"""
 	breakdown: Dict[str, int] = stats_post["breakdown"]
 
 	print("\n" + "=" * 80)
-	print(f" BẢNG KIỂM TOÁN THAM SỐ MÔ HÌNH: {cfg.project.name.upper()}")
+	print(f" MODEL PARAMETER AUDIT REPORT: {cfg.project.name.upper()}")
 	print("=" * 80)
-	print(f" {'Thành phần Kiến trúc':<36} | {'Số lượng Tham số':>18} | {'Tỷ trọng':>10}")
+	print(f" {'Architecture Component':<36} | {'Parameter Count':>18} | {'Ratio':>10}")
 	print("-" * 80)
 
 	inf_total = max(1, stats_post["inference_params"])
@@ -62,7 +62,7 @@ def print_parameter_report(
 
 	print("-" * 80)
 	print(
-		f" {'TỔNG THAM SỐ MÔ HÌNH LLADA':<36} | "
+		f" {'TOTAL LLADA INFERENCE PARAMETERS':<36} | "
 		f"{stats_post['inference_params']:>18,} | "
 		f"({stats_post['inference_params'] / 1e6:.4f}M)"
 	)
@@ -72,21 +72,21 @@ def print_parameter_report(
 		limit = 10_000_000
 		margin = limit - stats_post["inference_params"]
 		assert stats_post["inference_params"] < limit, (
-			f"Tổng tham số ({stats_post['inference_params']:,}) vượt ngưỡng 10,000,000!"
+			f"Total parameters ({stats_post['inference_params']:,}) exceed 10,000,000 limit!"
 		)
 		print(
-			f" [XÁC NHẬN HỢP LỆ <10M] Tổng tham số Inference = {stats_post['inference_params']:,} "
-			f"(~{stats_post['inference_params'] / 1e6:.2f}M < 10,000,000 | Dư {margin:,} tham số)."
+			f" [AUDIT PASSED: <10M] Total inference parameters = {stats_post['inference_params']:,} "
+			f"(~{stats_post['inference_params'] / 1e6:.2f}M < 10,000,000 | Margin: {margin:,} parameters)."
 		)
 	elif stats_post["inference_params"] < 150_000_000:
 		print(
-			f" [XÁC NHẬN HỢP LỆ <150M] Tổng tham số Inference = {stats_post['inference_params']:,} "
+			f" [AUDIT PASSED: <150M] Total inference parameters = {stats_post['inference_params']:,} "
 			f"(~{stats_post['inference_params'] / 1e6:.2f}M < 150,000,000)."
 		)
 	else:
 		print(
-			f" [XÁC NHẬN QUY MÔ LỚN] Tổng tham số Inference = {stats_post['inference_params']:,} "
-			f"(~{stats_post['inference_params'] / 1e9:.3f}B tham số)."
+			f" [AUDIT PASSED: MULTI-BILLION] Total inference parameters = {stats_post['inference_params']:,} "
+			f"(~{stats_post['inference_params'] / 1e9:.3f}B parameters)."
 		)
 
 	return stats_post
@@ -94,11 +94,11 @@ def print_parameter_report(
 
 def print_multi_billion_scale_table(base_cfg: FullConfig) -> None:
 	"""
-	Kiểm tra nhanh toàn bộ các cấu hình mở rộng từ 10M lên tới 7B+ tham số
-	(tốn 0MB RAM/VRAM) để chứng minh khả năng mở rộng kiến trúc lên hàng tỷ tham số.
+	Quickly verify all scaling presets from 10M up to 7B+ parameters
+	(0MB RAM/VRAM required) to validate architectural scaling.
 	"""
 	print("\n" + "=" * 88)
-	print(" BẢNG MỞ RỘNG QUY MÔ KIẾN TRÚC (SCALING UP TO MULTI-BILLION PARAMETERS)")
+	print(" ARCHITECTURAL SCALING TABLE (SCALING UP TO MULTI-BILLION PARAMETERS)")
 	print("=" * 88)
 	print(
 		f" {'Preset':<8} | {'Vocab':>7} | {'d_model':>7} | {'Layers':>6} | {'Heads (Q/KV)':>12} | "
@@ -122,25 +122,25 @@ def print_multi_billion_scale_table(base_cfg: FullConfig) -> None:
 
 
 def main() -> None:
-	parser = argparse.ArgumentParser(description="Đánh giá mô hình & kiểm toán tham số Open-SLM Killer.")
-	parser.add_argument("--config", type=str, default="config.toml", help="Đường dẫn tới config.toml")
+	parser = argparse.ArgumentParser(description="Model evaluation and parameter audit for KLM LLaDA.")
+	parser.add_argument("--config", type=str, default="config.toml", help="Path to config.toml")
 	parser.add_argument(
 		"--scale",
 		type=str,
 		default=None,
 		choices=["custom", "10m", "100m", "500m", "1b", "3b", "7b"],
-		help="Kiểm tra cấu hình theo preset quy mô",
+		help="Verify configuration according to a scale preset",
 	)
 	parser.add_argument(
 		"--all-scales",
 		action="store_true",
-		help="Hiển thị bảng tham số của mọi quy mô từ 10M lên tới 7B+ tham số",
+		help="Display parameter table across all presets from 10M to 7B+",
 	)
 	parser.add_argument(
 		"--num-samples",
 		type=int,
 		default=10,
-		help="Số lượng bài toán ArithMark-3 dùng để chấm điểm",
+		help="Number of ArithMark-3 math sandbox test problems to evaluate",
 	)
 	args = parser.parse_args()
 
@@ -151,7 +151,6 @@ def main() -> None:
 		print_parameter_report(stats, stats, cfg)
 		if args.all_scales:
 			print_multi_billion_scale_table(cfg)
-
 		return
 
 	import torch
@@ -184,11 +183,11 @@ def main() -> None:
 	if (ckpt_dir / "model.safetensors").exists() or (ckpt_dir / "model.safetensors.index.json").exists():
 		try:
 			info = load_checkpoint(model, ckpt_dir, device)
-			print(f"[Evaluate] Đã nạp trọng số từ '{info['loaded_from']}' (step={info['step']}).")
+			print(f"[Evaluate] Loaded weights from '{info['loaded_from']}' (step={info['step']}).")
 		except Exception as exc:
-			print(f"[Evaluate] Dùng trọng số khởi tạo để đánh giá cấu trúc ({exc}).")
+			print(f"[Evaluate] Evaluating on initialized weights ({exc}).")
 	else:
-		print("[Evaluate] Chưa có checkpoint trong 'checkpoints/', đánh giá trên trọng số khởi tạo.")
+		print("[Evaluate] No checkpoint found in 'checkpoints/', evaluating on randomly initialized weights.")
 
 	stats_pre = count_params(model)
 	model.export_for_inference()
@@ -200,12 +199,12 @@ def main() -> None:
 			model, ckpt_dir, 0, cfg=cfg,
 			export_inference_copy=True
 		)
-		print(f"[Safetensors] Đã xuất trọng số Inference sạch (không MTP) tại: {inf_ckpt}")
+		print(f"[Safetensors] Exported clean inference weights to: {inf_ckpt}")
 
 	if args.all_scales:
 		print_multi_billion_scale_table(cfg)
 
-	# Đánh giá Perplexity và ArithMark-3
+	# Evaluate Perplexity and ArithMark-3
 	model.eval()
 	tokenizer = Tokenizer(cfg=cfg)
 	val_dataset = MemmapTokenDataset(cfg, "val")
@@ -230,7 +229,7 @@ def main() -> None:
 		total_reward = 0.0
 
 		print("\n" + "-" * 80)
-		print(f" ĐÁNH GIÁ BENCHMARK TOÁN HỌC & SUY LUẬN (ARITHMARK-3 SANDBOX, N={args.num_samples})")
+		print(f" MATHEMATICAL & REASONING BENCHMARK EVALUATION (ARITHMARK-3 SANDBOX, N={args.num_samples})")
 		print("-" * 80)
 
 		for idx in range(args.num_samples):
@@ -249,8 +248,8 @@ def main() -> None:
 			if idx < 3:
 				clean_prompt = task.prompt.replace("<|bos|>", "").strip()
 				clean_out = completion_text.replace("\n", " ").strip()[:90]
-				print(f" [Mẫu #{idx + 1}] Đề bài : {clean_prompt}")
-				print(f"          Đáp án chuẩn: {task.ground_truth} | Sinh ra: {clean_out}")
+				print(f" [Sample #{idx + 1}] Prompt      : {clean_prompt}")
+				print(f"           Ground Truth: {task.ground_truth} | Generated: {clean_out}")
 
 		acc = (correct / max(1, args.num_samples)) * 100.0
 		avg_reward = total_reward / max(1, args.num_samples)
@@ -258,8 +257,8 @@ def main() -> None:
 		print("-" * 80)
 		print(f" -> Validation Cross-Entropy Loss : {mean_loss:.4f}")
 		print(f" -> Validation Perplexity (PPL)   : {ppl:.2f}")
-		print(f" -> Điểm ArithMark-3 Accuracy     : {acc:.1f}% ({correct}/{args.num_samples})")
-		print(f" -> Điểm Thưởng Trung bình (RL)   : {avg_reward:.3f}")
+		print(f" -> ArithMark-3 Accuracy Score    : {acc:.1f}% ({correct}/{args.num_samples})")
+		print(f" -> Average RL Reward Score       : {avg_reward:.3f}")
 		print("=" * 80 + "\n")
 
 
