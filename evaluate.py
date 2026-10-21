@@ -174,6 +174,7 @@ def main() -> None:
 	from src.model import KLMModel
 	from src.rl_env import VerifiableMathLogicEnv
 	from tokenizer.build_tokenizer import Tokenizer
+	from train import apply_diffusion_mask
 
 	device = torch.device(
 		"cuda" if (cfg.project.device.lower().startswith("cuda") and torch.cuda.is_available())
@@ -228,11 +229,13 @@ def main() -> None:
 	batch_size = max(1, min(cfg.training.micro_batch_size, 8))
 	with torch.no_grad():
 		for _ in range(6):
-			x, y = val_dataset.sample_batch(batch_size, device)
-			out = model(input_ids=x, targets=y)
-			loss_val = out.ntp_loss if out.ntp_loss is not None else out.loss
-			if loss_val is not None:
-				losses.append(float(loss_val.item()))
+			clean_tokens, _ = val_dataset.sample_batch(batch_size, device)
+			noisy_input, targets, mask, _ = apply_diffusion_mask(
+				clean_tokens, cfg, mask_token_id=tokenizer.mask_id, is_sft=False
+			)
+			out = model(input_ids=noisy_input, targets=targets, mask_indices=mask)
+			if out.loss is not None:
+				losses.append(float(out.loss.item()))
 
 		mean_loss = sum(losses) / max(1, len(losses))
 		ppl = math.exp(min(20.0, mean_loss))
@@ -248,8 +251,8 @@ def main() -> None:
 		for idx in range(args.num_samples):
 			task = env.sample_task()
 			prompt_ids = tokenizer.encode(task.prompt)
-			inp = torch.tensor([prompt_ids], torch.long, device)
-			gen_ids = model.generate(inp, temperature=0.0, eos_token_id=tokenizer.eos_id)
+			inp = torch.tensor([prompt_ids], dtype=torch.long, device=device)
+			gen_ids = model.generate(prompt_ids=inp, gen_length=64, steps=16, temperature=0.0)
 			completion_ids = gen_ids[0, len(prompt_ids):].tolist()
 			completion_text = tokenizer.decode(completion_ids, False)
 			reward, is_corr = env.score_response(completion_text, task.ground_truth)
