@@ -6,31 +6,22 @@
 # Chế độ quy mô (Preset): "custom" (dùng thông số bên dưới), hoặc "10m", "100m", "500m", "1b", "3b", "7b"
 scale_preset = "custom"
 
-# Kiến trúc LLaDA (Large Language Diffusion with Masking - Bidirectional Transformer)
+# Cấu hình chuẩn LLaDA (Large Language Diffusion with Masking)
+# Thiết kế tối ưu phân khúc <10M tham số (~9.36M params khi tied embeddings)
 vocab_size = 4096
 d_model = 256
 n_layers = 12
 n_heads = 8
 n_kv_heads = 2                # Grouped-Query Attention (GQA 4:1)
 head_dim = 32
-d_ff = 688                    # SwiGLU intermediate size
+d_ff = 688                    # SwiGLU intermediate size (<10M params)
 max_seq_len = 1024
 rope_theta = 10000.0
 rope_scaling_factor = 1.0
 dropout = 0.0
 tie_word_embeddings = true
+use_qk_norm = true            # RMSNorm trên Q và K ổn định hóa phân bố khuếch tán
 
-# Cấu hình LLaDA Diffusion
-is_causal = false             # Non-causal: Attention 2 chiều (Bidirectional)
-mask_token_id = 4             # Token ID cho <|mask|>
-sampling_steps = 64           # Số bước khuếch tán khi giải mã sinh văn bản
-
-# Các thành phần tối ưu độ ổn định
-use_qk_norm = true            # RMSNorm trên Q và K chống nổ gradient
-use_attn_output_gate = false  # Cắt gọt: chuẩn LLaDA không dùng output gate
-attn_gate_rank = 0
-use_short_conv = false        # Cắt gọt: bỏ causal convolution
-short_conv_kernel = 5
-use_dense_connections = false # Cắt gọt: bỏ DenseFormer
-mtp_num_heads = 0             # Cắt gọt: bỏ Multi-Token Prediction (không dùng cho Diffusion)
-chunked_loss_size = 0         # Đặt > 0 khi huấn luyện mô hình vocab lớn
+# Tham số Diffusion LLaDA
+mask_token_id = 4             # Token ID của <|mask|>
+sampling_steps = 64           # Số bước khử nhiễu khi sinh văn bản

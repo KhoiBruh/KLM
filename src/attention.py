@@ -4,7 +4,7 @@ Mô-đun Bidirectional Attention & Khối Transformer cho kiến trúc LLaDA
 LLaDA (Large Language Diffusion with Masking) sử dụng Transformer 2 chiều (Bidirectional):
 - Toàn bộ chuỗi chú ý lẫn nhau (is_causal = False).
 - QK-Norm (`RMSNorm` trên Q và K trước khi xoay RoPE) chống trôi/nổ gradient.
-- RoPE 1D mã hóa vị trí tuyệt đối/tương đối 2 chiều.
+- RoPE 1D mã hóa vị trí 2 chiều.
 - FlashAttention tối ưu hóa thông qua `F.scaled_dot_product_attention`.
 """
 
@@ -20,7 +20,6 @@ from torch.nn import Module
 
 from .config_loader import ModelConfig
 from .layers import (
-	DepthwiseShortConv,
 	RMSNorm,
 	RotaryEmbed,
 	SwiGLUMLP,
@@ -30,7 +29,7 @@ from .layers import (
 
 @dataclass
 class LayerKVCache:
-	"""Giữ lại tương thích ngược kiểu dữ liệu (không sử dụng trong sinh LLaDA)."""
+	"""Giữ lại tương thích ngược kiểu dữ liệu."""
 	k: torch.Tensor
 	v: torch.Tensor
 	conv_state: Optional[torch.Tensor] = None
@@ -54,7 +53,7 @@ def repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
 
 class GatedGQA(Module):
 	"""
-	Grouped-Query Attention 2 chiều (Bidirectional GQA) cho LLaDA:
+	Bidirectional Grouped-Query Attention (GQA 2 chiều) chuẩn LLaDA:
 	- Hỗ trợ đầy đủ tương tác 2 chiều giữa các token đã mask và token ngữ cảnh (is_causal=False).
 	- QK-Norm (`RMSNorm` trên Q và K) bảo vệ độ ổn định khi dùng Muon/AdamW.
 	- Tích hợp PyTorch SDPA (FlashAttention / MemEfficient kernel).
@@ -70,65 +69,36 @@ class GatedGQA(Module):
 		self.q_dim = self.n_heads * self.head_dim
 		self.kv_dim = self.n_kv_heads * self.head_dim
 		self.dropout = cfg.dropout
-		self.is_causal = getattr(cfg, "is_causal", False)
-
-		self.use_short_conv = getattr(cfg, "use_short_conv", False)
-		if self.use_short_conv:
-			self.short_conv = DepthwiseShortConv(self.d_model, cfg.short_conv_kernel)
 
 		self.q_proj = nn.Linear(self.d_model, self.q_dim, bias=False)
 		self.k_proj = nn.Linear(self.d_model, self.kv_dim, bias=False)
 		self.v_proj = nn.Linear(self.d_model, self.kv_dim, bias=False)
 
-		self.use_qk_norm = cfg.use_qk_norm
+		self.use_qk_norm = getattr(cfg, "use_qk_norm", True)
 		if self.use_qk_norm:
 			self.q_norm = RMSNorm(self.head_dim)
 			self.k_norm = RMSNorm(self.head_dim)
 
-		self.use_attn_output_gate = getattr(cfg, "use_attn_output_gate", False)
-		self.attn_gate_rank = getattr(cfg, "attn_gate_rank", 0)
-		if self.use_attn_output_gate:
-			if 0 < self.attn_gate_rank < self.d_model:
-				self.gate_down = nn.Linear(self.d_model, self.attn_gate_rank, bias=False)
-				self.gate_up = nn.Linear(self.attn_gate_rank, self.q_dim, bias=False)
-				self.gate_proj: Optional[nn.Linear] = None
-			else:
-				self.gate_down = None
-				self.gate_up = None
-				self.gate_proj = nn.Linear(self.d_model, self.q_dim, bias=False)
-
 		self.o_proj = nn.Linear(self.q_dim, self.d_model, bias=False)
-
-	def _compute_gate(self, x: torch.Tensor) -> torch.Tensor:
-		if self.gate_proj is not None:
-			return self.gate_proj(x)
-		return self.gate_up(self.gate_down(x))
 
 	def forward(
 		self,
 		x: torch.Tensor,
 		rope: RotaryEmbed,
 		attention_mask: Optional[torch.Tensor] = None,
-		kv_cache: Optional[LayerKVCache] = None,
-		use_cache: bool = False,
-	) -> Tuple[torch.Tensor, Optional[LayerKVCache]]:
+		**kwargs,
+	) -> Tuple[torch.Tensor, None]:
 		bsz, seq_len, _ = x.shape
 
-		if self.use_short_conv:
-			conv_state = kv_cache.conv_state if kv_cache is not None else None
-			x_conv, _ = self.short_conv(x, conv_state=conv_state, use_cache=False)
-		else:
-			x_conv = x
-
-		q = self.q_proj(x_conv).view(bsz, seq_len, self.n_heads, self.head_dim).transpose(1, 2)
-		k = self.k_proj(x_conv).view(bsz, seq_len, self.n_kv_heads, self.head_dim).transpose(1, 2)
-		v = self.v_proj(x_conv).view(bsz, seq_len, self.n_kv_heads, self.head_dim).transpose(1, 2)
+		q = self.q_proj(x).view(bsz, seq_len, self.n_heads, self.head_dim).transpose(1, 2)
+		k = self.k_proj(x).view(bsz, seq_len, self.n_kv_heads, self.head_dim).transpose(1, 2)
+		v = self.v_proj(x).view(bsz, seq_len, self.n_kv_heads, self.head_dim).transpose(1, 2)
 
 		if self.use_qk_norm:
 			q = self.q_norm(q)
 			k = self.k_norm(k)
 
-		# Áp dụng RoPE 2 chiều: mỗi vị trí token trong chuỗi tương tác với toàn bộ chuỗi
+		# Áp dụng RoPE 2 chiều: toàn bộ chuỗi
 		cos, sin = rope(q, seq_len, 0)
 		q, k = rotary_pos_emb(q, k, cos, sin)
 
@@ -136,21 +106,19 @@ class GatedGQA(Module):
 		v_exp = repeat_kv(v, self.n_rep)
 
 		# LLaDA chú ý 2 chiều (Bidirectional): is_causal = False
-		is_causal = self.is_causal and (seq_len > 1)
 		attn_out = F.scaled_dot_product_attention(
 			q, k_exp, v_exp,
 			attn_mask=attention_mask,
 			dropout_p=self.dropout if self.training else 0.0,
-			is_causal=is_causal,
+			is_causal=False,
 		)
 
 		attn_out = attn_out.transpose(1, 2).contiguous().view(bsz, seq_len, self.q_dim)
-
-		if self.use_attn_output_gate:
-			gate = self._compute_gate(x)
-			attn_out = attn_out * torch.sigmoid(gate)
-
 		return self.o_proj(attn_out), None
+
+
+# Alias chuẩn tên kiến trúc
+BidirectionalGQA = GatedGQA
 
 
 class TransformerBlock(Module):
@@ -160,7 +128,7 @@ class TransformerBlock(Module):
 		super().__init__()
 		self.layer_idx = layer_idx
 		self.attn_norm = RMSNorm(cfg.d_model)
-		self.attn = GatedGQA(cfg)
+		self.attn = BidirectionalGQA(cfg)
 		self.ffn_norm = RMSNorm(cfg.d_model)
 		self.mlp = SwiGLUMLP(cfg.d_model, cfg.d_ff, cfg.dropout)
 
@@ -169,9 +137,8 @@ class TransformerBlock(Module):
 		x: torch.Tensor,
 		rope: RotaryEmbed,
 		attention_mask: Optional[torch.Tensor] = None,
-		kv_cache: Optional[LayerKVCache] = None,
-		use_cache: bool = False,
-	) -> Tuple[torch.Tensor, Optional[LayerKVCache]]:
+		**kwargs,
+	) -> Tuple[torch.Tensor, None]:
 		attn_out, _ = self.attn(
 			self.attn_norm(x), rope=rope, attention_mask=attention_mask
 		)

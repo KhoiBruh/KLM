@@ -50,11 +50,8 @@ def print_parameter_report(
 			if cfg.model.tie_word_embeddings
 			else "Token Embeddings + LM Head (Untied)"
 		),
-		"short_conv": f"Depthwise ShortConv (kernel={cfg.model.short_conv_kernel})",
-		"attention_qkv_o": f"GQA Projections (Q={cfg.model.n_heads}h, KV={cfg.model.n_kv_heads}h, O)",
-		"attention_output_gate": "Attention Output Gate (Sigmoid/SiLU)",
+		"attention_qkv_o": f"Bidirectional GQA (Q={cfg.model.n_heads}h, KV={cfg.model.n_kv_heads}h, O)",
 		"qk_and_layer_norms": "QK-Norm & Layer RMSNorms",
-		"denseformer_alphas": "DenseFormer Cross-Layer Alphas",
 		"mlp_swiglu": f"SwiGLU FFN (d_ff={cfg.model.d_ff})",
 	}
 
@@ -65,16 +62,7 @@ def print_parameter_report(
 
 	print("-" * 80)
 	print(
-		f" {'Tổng tham số lúc Train (gồm MTP)':<36} | "
-		f"{stats_pre['training_params']:>18,} | "
-		f"({stats_pre['training_params'] / 1e6:.4f}M)"
-	)
-	print(
-		f" {'Nhánh MTP đã cắt bỏ khi Inference':<36} | "
-		f"{-stats_pre['mtp_params']:>18,} | (Đã xóa sạch)"
-	)
-	print(
-		f" {'TỔNG THAM SỐ THI ĐẤU (INFERENCE)':<36} | "
+		f" {'TỔNG THAM SỐ MÔ HÌNH LLADA':<36} | "
 		f"{stats_post['inference_params']:>18,} | "
 		f"({stats_post['inference_params'] / 1e6:.4f}M)"
 	)
@@ -159,11 +147,8 @@ def main() -> None:
 	cfg = load_config(args.config, args.scale)
 
 	if not HAS_TORCH:
-		stats_pre = est_config_params(cfg)
-		cfg_inf = copy.deepcopy(cfg)
-		cfg_inf.model.mtp_num_heads = 0
-		stats_post = est_config_params(cfg_inf)
-		print_parameter_report(stats_pre, stats_post, cfg)
+		stats = est_config_params(cfg)
+		print_parameter_report(stats, stats, cfg)
 		if args.all_scales:
 			print_multi_billion_scale_table(cfg)
 

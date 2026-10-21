@@ -37,8 +37,7 @@ except ImportError:
 
 def est_config_params(cfg: Union[FullConfig, ModelConfig]) -> Dict[str, Any]:
 	"""
-	Tính toán giải tích chính xác tuyệt đối số lượng tham số độc nhất của kiến trúc từ `ModelConfig`.
-	Hữu ích để kiểm toán tức thì từ <10M lên tới 7B+ tham số mà không tốn RAM.
+	Tính toán giải tích chính xác tuyệt đối số lượng tham số độc nhất của kiến trúc LLaDA từ `ModelConfig`.
 	"""
 	m = cfg.model if isinstance(cfg, FullConfig) else cfg
 	m.apply_preset_if_needed()
@@ -52,49 +51,28 @@ def est_config_params(cfg: Union[FullConfig, ModelConfig]) -> Dict[str, Any]:
 	if not m.tie_word_embeddings:
 		emb_params += m.vocab_size * d
 
-	short_conv_params = L * (d * m.short_conv_kernel) if m.use_short_conv else 0
 	attn_qkvo_params = L * (d * q_dim + 2 * d * kv_dim + q_dim * d)
-
-	if m.use_attn_output_gate:
-		if 0 < m.attn_gate_rank < d:
-			gate_params = L * (d * m.attn_gate_rank + m.attn_gate_rank * q_dim)
-		else:
-			gate_params = L * (d * q_dim)
-	else:
-		gate_params = 0
-
-	qk_norm_params = L * (2 * m.head_dim) if m.use_qk_norm else 0
+	qk_norm_params = L * (2 * m.head_dim) if getattr(m, "use_qk_norm", True) else 0
 	layer_norm_params = L * (2 * d) + d
 	norm_params = qk_norm_params + layer_norm_params
-
-	dense_params = sum(i + 2 for i in range(L)) if m.use_dense_connections else 0
 	mlp_params = L * (3 * d * m.d_ff)
-	mtp_params = m.mtp_num_heads * (d * d) if m.mtp_num_heads > 0 else 0
 
 	inference_params = (
 		emb_params
-		+ short_conv_params
 		+ attn_qkvo_params
-		+ gate_params
 		+ norm_params
-		+ dense_params
 		+ mlp_params
 	)
-	training_params = inference_params + mtp_params
 
 	return {
-		"training_params": training_params,
+		"training_params": inference_params,
 		"inference_params": inference_params,
-		"mtp_params": mtp_params,
+		"mtp_params": 0,
 		"breakdown": {
 			"embeddings_and_lm_head": emb_params,
-			"short_conv": short_conv_params,
 			"attention_qkv_o": attn_qkvo_params,
-			"attention_output_gate": gate_params,
 			"qk_and_layer_norms": norm_params,
-			"denseformer_alphas": dense_params,
 			"mlp_swiglu": mlp_params,
-			"mtp_head": mtp_params,
 			"other": 0,
 		},
 	}
@@ -102,30 +80,23 @@ def est_config_params(cfg: Union[FullConfig, ModelConfig]) -> Dict[str, Any]:
 
 def count_params(model: Any) -> Dict[str, Any]:
 	"""
-	Đếm chính xác số lượng tham số độc nhất trên đối tượng mô hình PyTorch
-	(loại bỏ trùng lặp do Weight Tying và tách biệt rõ tham số MTP).
+	Đếm chính xác số lượng tham số độc nhất trên đối tượng mô hình PyTorch LLaDA.
 	"""
 	if isinstance(model, (FullConfig, ModelConfig)) or not HAS_TORCH:
 		return est_config_params(model)
 
 	seen_data_ptrs: set[int] = set()
 	total_unique = 0
-	mtp_params = 0
 
 	breakdown: Dict[str, int] = {
 		"embeddings_and_lm_head": 0,
-		"short_conv": 0,
 		"attention_qkv_o": 0,
-		"attention_output_gate": 0,
 		"qk_and_layer_norms": 0,
-		"denseformer_alphas": 0,
 		"mlp_swiglu": 0,
-		"mtp_head": 0,
 		"other": 0,
 	}
 
 	for name, param in model.named_parameters():
-		# Trên thiết bị meta, data_ptr() đều bằng 0 nên dùng tên tham số để lọc Weight Tying
 		if param.is_meta:
 			if name == "lm_head.weight" and getattr(model.cfg, "tie_word_embeddings", True):
 				continue
@@ -138,31 +109,21 @@ def count_params(model: Any) -> Dict[str, Any]:
 		num = param.numel()
 		total_unique += num
 
-		if "mtp_proj" in name:
-			mtp_params += num
-			breakdown["mtp_head"] += num
-		elif "tok_embeddings" in name or "lm_head" in name:
+		if "tok_embeddings" in name or "lm_head" in name:
 			breakdown["embeddings_and_lm_head"] += num
-		elif "short_conv" in name:
-			breakdown["short_conv"] += num
-		elif "gate_down" in name or "gate_up" in name or "attn.gate_proj" in name:
-			breakdown["attention_output_gate"] += num
 		elif any(k in name for k in ("q_proj", "k_proj", "v_proj", "o_proj")):
 			breakdown["attention_qkv_o"] += num
 		elif "norm" in name:
 			breakdown["qk_and_layer_norms"] += num
-		elif "dense_alphas" in name:
-			breakdown["denseformer_alphas"] += num
 		elif "mlp." in name:
 			breakdown["mlp_swiglu"] += num
 		else:
 			breakdown["other"] += num
 
-	inference_params = total_unique - mtp_params
 	return {
 		"training_params": total_unique,
-		"inference_params": inference_params,
-		"mtp_params": mtp_params,
+		"inference_params": total_unique,
+		"mtp_params": 0,
 		"breakdown": breakdown,
 	}
 

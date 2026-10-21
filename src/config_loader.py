@@ -28,12 +28,9 @@ SCALE_PRESETS: Dict[str, Dict[str, Any]] = {
 		"head_dim": 32,
 		"d_ff": 688,
 		"max_seq_len": 1024,
-		"attn_gate_rank": 98,
 		"tie_word_embeddings": True,
-		"chunked_loss_size": 0,
 	},
 	"100m": {
-		# Đánh bại GPT-X3-150M ở phân khúc <150M tham số (~148.9M inference params)
 		"vocab_size": 32768,
 		"d_model": 640,
 		"n_layers": 28,
@@ -42,12 +39,9 @@ SCALE_PRESETS: Dict[str, Dict[str, Any]] = {
 		"head_dim": 64,
 		"d_ff": 1760,
 		"max_seq_len": 2048,
-		"attn_gate_rank": 128,
 		"tie_word_embeddings": True,
-		"chunked_loss_size": 0,
 	},
 	"500m": {
-		# Phân khúc <500M tham số (~496.5M inference params)
 		"vocab_size": 32768,
 		"d_model": 1152,
 		"n_layers": 28,
@@ -56,12 +50,9 @@ SCALE_PRESETS: Dict[str, Dict[str, Any]] = {
 		"head_dim": 64,
 		"d_ff": 3328,
 		"max_seq_len": 4096,
-		"attn_gate_rank": 256,
 		"tie_word_embeddings": True,
-		"chunked_loss_size": 2048,
 	},
 	"1b": {
-		# Quy mô ~1.02 tỷ tham số
 		"vocab_size": 65536,
 		"d_model": 1536,
 		"n_layers": 32,
@@ -70,12 +61,9 @@ SCALE_PRESETS: Dict[str, Dict[str, Any]] = {
 		"head_dim": 64,
 		"d_ff": 4096,
 		"max_seq_len": 4096,
-		"attn_gate_rank": 384,
 		"tie_word_embeddings": False,
-		"chunked_loss_size": 4096,
 	},
 	"3b": {
-		# Quy mô ~2.93 tỷ tham số
 		"vocab_size": 65536,
 		"d_model": 2560,
 		"n_layers": 36,
@@ -84,12 +72,9 @@ SCALE_PRESETS: Dict[str, Dict[str, Any]] = {
 		"head_dim": 80,
 		"d_ff": 6912,
 		"max_seq_len": 8192,
-		"attn_gate_rank": 512,
 		"tie_word_embeddings": False,
-		"chunked_loss_size": 4096,
 	},
 	"7b": {
-		# Quy mô ~6.96 tỷ tham số (<7B)
 		"vocab_size": 128256,
 		"d_model": 4096,
 		"n_layers": 32,
@@ -98,9 +83,7 @@ SCALE_PRESETS: Dict[str, Dict[str, Any]] = {
 		"head_dim": 128,
 		"d_ff": 11008,
 		"max_seq_len": 8192,
-		"attn_gate_rank": 512,
 		"tie_word_embeddings": False,
-		"chunked_loss_size": 4096,
 	},
 }
 
@@ -148,16 +131,7 @@ class ModelConfig:
 	is_causal: bool = False
 	mask_token_id: int = 4
 	sampling_steps: int = 64
-
-	# Các vũ khí kiến trúc đặc biệt
 	use_qk_norm: bool = True
-	use_attn_output_gate: bool = False
-	attn_gate_rank: int = 0
-	use_short_conv: bool = False
-	short_conv_kernel: int = 5
-	use_dense_connections: bool = False
-	mtp_num_heads: int = 0
-	chunked_loss_size: int = 0
 
 	def apply_preset_if_needed(self) -> None:
 		preset_key = self.scale_preset.strip().lower()
