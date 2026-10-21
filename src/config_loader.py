@@ -144,14 +144,19 @@ class ModelConfig:
 	dropout: float = 0.0
 	tie_word_embeddings: bool = True
 
+	# Cấu hình LLaDA Diffusion
+	is_causal: bool = False
+	mask_token_id: int = 4
+	sampling_steps: int = 64
+
 	# Các vũ khí kiến trúc đặc biệt
 	use_qk_norm: bool = True
-	use_attn_output_gate: bool = True
-	attn_gate_rank: int = 98
-	use_short_conv: bool = True
+	use_attn_output_gate: bool = False
+	attn_gate_rank: int = 0
+	use_short_conv: bool = False
 	short_conv_kernel: int = 5
-	use_dense_connections: bool = True
-	mtp_num_heads: int = 1
+	use_dense_connections: bool = False
+	mtp_num_heads: int = 0
 	chunked_loss_size: int = 0
 
 	def apply_preset_if_needed(self) -> None:
@@ -189,9 +194,15 @@ class TrainingConfig:
 	warmup_ratio: float = 0.03
 	stable_ratio: float = 0.82
 	decay_ratio: float = 0.15
-	use_tst: bool = True
-	tst_ratio: float = 0.30
-	tst_pool_factor: int = 4
+
+	# Cấu hình Masking Diffusion
+	mask_ratio_min: float = 0.15
+	mask_ratio_max: float = 1.0
+	noise_schedule: str = "uniform"
+
+	use_tst: bool = False
+	tst_ratio: float = 0.0
+	tst_pool_factor: int = 1
 	gradient_checkpointing: bool = True
 	distributed_strategy: str = "auto"
 	low_cpu_mem_usage: bool = False

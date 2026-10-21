@@ -31,6 +31,7 @@ SPECIAL_TOKENS: List[str] = [
 	"<|bos|>",
 	"<|eos|>",
 	"<|unk|>",
+	"<|mask|>",
 	"<|user|>",
 	"<|assistant|>",
 	"<|think|>",
@@ -200,6 +201,7 @@ class Tokenizer:
 		self.bos_id: int = self.special_token_to_id["<|bos|>"]
 		self.eos_id: int = self.special_token_to_id["<|eos|>"]
 		self.unk_id: int = self.special_token_to_id["<|unk|>"]
+		self.mask_id: int = self.special_token_to_id["<|mask|>"]
 		self.user_id: int = self.special_token_to_id["<|user|>"]
 		self.assistant_id: int = self.special_token_to_id["<|assistant|>"]
 		self.think_id: int = self.special_token_to_id["<|think|>"]
