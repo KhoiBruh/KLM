@@ -301,6 +301,11 @@ class KLMModel(nn.Module):
 					for b in range(bsz):
 						_, low_conf_indices = torch.topk(confidence[b], k=num_to_mask, largest=False)
 						x[b, b_start + low_conf_indices] = self.mask_token_id
+				elif s >= 1 and (confidence >= 0.85).all():
+					# Early convergence of block: all tokens fully resolved with high confidence
+					if step_callback is not None:
+						step_callback(min(global_step, effective_total_steps), effective_total_steps, x.detach())
+					break
 
 				if step_callback is not None:
 					step_callback(min(global_step, effective_total_steps), effective_total_steps, x.detach())

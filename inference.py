@@ -207,8 +207,12 @@ def main():
 
 	if args.prompt is not None or not sys.stdin.isatty():
 		prompt_str = args.prompt or "Calculate: (125 + 75) * 4"
-		print(f"\nUser > {prompt_str}")
-		print("Assistant > ", end="", flush=True)
+		if ckpt_stage == "pretrain":
+			print(f"\nPrompt > {prompt_str}")
+			print("Continuation > ", end="", flush=True)
+		else:
+			print(f"\nUser > {prompt_str}")
+			print("Assistant > ", end="", flush=True)
 		generate_llada(
 			model, tokenizer, prompt_str, device,
 			args.gen_length, args.steps, args.temperature, args.schedule,
