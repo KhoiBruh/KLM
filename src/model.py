@@ -161,19 +161,19 @@ class KLMModel(nn.Module):
 		num_masked = valid_mask.sum()
 		if num_masked > 0:
 			token_losses = F.cross_entropy(
-				logits.view(-1, self.vocab_size).float(),
+				logits.view(-1, self.vocab_size),
 				targets.view(-1),
 				ignore_index=ignore_index,
 				reduction="none",
 			).view_as(targets)
-			masked_losses = token_losses * valid_mask.float()
-			per_seq_counts = valid_mask.sum(dim=-1).clamp(min=1).float()
+			masked_losses = token_losses * valid_mask
+			per_seq_counts = valid_mask.sum(dim=-1).clamp(min=1).to(dtype=token_losses.dtype)
 			per_seq_loss = masked_losses.sum(dim=-1) / per_seq_counts
-			active_seqs = (valid_mask.sum(dim=-1) > 0).float()
+			active_seqs = (valid_mask.sum(dim=-1) > 0).to(dtype=token_losses.dtype)
 			loss = (per_seq_loss * active_seqs).sum() / active_seqs.sum().clamp(min=1.0)
 		else:
 			loss = F.cross_entropy(
-				logits.view(-1, self.vocab_size).float(),
+				logits.view(-1, self.vocab_size),
 				targets.view(-1),
 				ignore_index=ignore_index,
 			)
@@ -185,7 +185,7 @@ class KLMModel(nn.Module):
 			mtp_loss=None,
 		)
 
-	@torch.inference_mode()
+	@torch.no_grad()
 	def generate(
 		self,
 		input_ids: Optional[torch.Tensor] = None,

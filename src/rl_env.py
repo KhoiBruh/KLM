@@ -214,7 +214,7 @@ class GRPOTrainer:
 					input_ids=prompt_tensor,
 					gen_length=self.max_gen_len,
 					temperature=0.85,
-				)
+				).clone()
 
 				ref_out = self.raw_model(input_ids=sequences)
 				ref_log_probs = F.log_softmax(ref_out.logits.float(), dim=-1).detach()
