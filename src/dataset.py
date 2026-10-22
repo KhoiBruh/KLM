@@ -175,14 +175,17 @@ class MemmapTokenDataset(Dataset):
 		file_bytes = self.bin_path.stat().st_size
 		self.total_tokens = file_bytes // self.dtype.itemsize
 		self.num_samples = max(1, (self.total_tokens - 1) // self.seq_len)
+		self._mmap: Optional[np.memmap] = None
 
 	def _open_memmap(self) -> np.memmap:
-		return np.memmap(
-			str(self.bin_path),
-			dtype=self.dtype,
-			mode="r",
-			shape=(self.total_tokens,),
-		)
+		if self._mmap is None:
+			self._mmap = np.memmap(
+				str(self.bin_path),
+				dtype=self.dtype,
+				mode="r",
+				shape=(self.total_tokens,),
+			)
+		return self._mmap
 
 	def __len__(self) -> int:
 		return self.num_samples
@@ -203,7 +206,7 @@ class MemmapTokenDataset(Dataset):
 		device: Union[str, torch.device] = "cpu",
 		seq_len_override: Optional[int] = None,
 		sft_masking: bool = False,
-		assistant_token_id: int = 5,
+		assistant_token_id: int = 6,
 	) -> Tuple[torch.Tensor, torch.Tensor]:
 		"""
 		Randomly samples a micro-batch directly from `np.memmap`.
@@ -217,31 +220,83 @@ class MemmapTokenDataset(Dataset):
 		y_np = np.empty((batch_size, T), dtype=np.int64)
 
 		for i, s in enumerate(starts):
-			segment = mmap[s: s + T + 1].astype(np.int64)
+			s_idx = int(s)
+			if sft_masking:
+				lookahead = mmap[s_idx: min(max_start, s_idx + T)]
+				bos_hits = np.where(lookahead == 1)[0]
+				if len(bos_hits) > 0:
+					s_idx = min(max_start - 1, s_idx + int(bos_hits[0]))
+
+			segment = mmap[s_idx: s_idx + T + 1].astype(np.int64)
 			if segment.max() >= self.vocab_size:
 				segment = segment % self.vocab_size
 			x_np[i] = segment[:-1]
 			y_np[i] = segment[1:]
 
 			if sft_masking:
-				assist_positions = np.where(x_np[i] == assistant_token_id)[0]
-				if len(assist_positions) > 0:
-					first_assist = int(assist_positions[0])
-					y_np[i, :first_assist] = -100
+				_apply_sft_mask(x_np[i], y_np[i], assistant_token_id)
 
-		x = torch.from_numpy(x_np).to(device=device, non_blocking=True)
-		y = torch.from_numpy(y_np).to(device=device, non_blocking=True)
-		return x, y
+		x = torch.from_numpy(x_np)
+		y = torch.from_numpy(y_np)
+		if torch.device(device).type == "cuda":
+			x, y = x.pin_memory(), y.pin_memory()
+		return x.to(device=device, non_blocking=True), y.to(device=device, non_blocking=True)
 
 
 def _apply_sft_mask(
 	x_row: np.ndarray,
 	y_row: np.ndarray,
-	assistant_token_id: int
+	assistant_token_id: int = 6,
+	user_token_id: int = 5,
+	bos_token_id: int = 1,
+	eos_token_id: int = 2,
+	eos_keep_tokens: int = 16,
 ):
+	"""
+	Isolates a single SFT conversation starting at `<|bos|>`:
+	1. Pads any subsequent unrelated document after `<|eos|>` with `<|eos|>` so
+	   bidirectional attention never mixes unrelated conversations.
+	2. Masks (`-100`) all `<|user|>` prompt spans, leaving only `<|assistant|>` responses
+	   and 1 block (`eos_keep_tokens`) of `<|eos|>` tokens supervised.
+	"""
+	T = x_row.shape[0]
+	y_row[:] = x_row
+
 	assist_positions = np.where(x_row == assistant_token_id)[0]
-	if len(assist_positions) > 0:
-		y_row[: int(assist_positions[0])] = -100
+	if len(assist_positions) == 0:
+		return
+
+	first_assist = int(assist_positions[0])
+
+	# Find end of the conversation (<|eos|> after the first <|assistant|>)
+	eos_after = np.where(x_row[first_assist + 1:] == eos_token_id)[0]
+	if len(eos_after) > 0:
+		eos_idx = first_assist + 1 + int(eos_after[0])
+		if eos_idx + 1 < T:
+			x_row[eos_idx + 1:] = eos_token_id
+			y_row[eos_idx + 1:] = eos_token_id
+		if eos_idx + eos_keep_tokens < T:
+			y_row[eos_idx + eos_keep_tokens:] = -100
+		active_end = eos_idx + 1
+	else:
+		active_end = T
+
+	# Mask out the initial prompt up to and including the first <|assistant|> token
+	y_row[: first_assist + 1] = -100
+
+	# Mask out any subsequent multi-turn <|user|> prompt spans
+	user_starts = np.where(
+		(x_row[first_assist + 1: active_end] == user_token_id)
+		| (x_row[first_assist + 1: active_end] == bos_token_id)
+	)[0]
+	if len(user_starts) > 0:
+		for u_rel in user_starts:
+			u_pos = first_assist + 1 + int(u_rel)
+			next_assists = assist_positions[assist_positions > u_pos]
+			if len(next_assists) > 0:
+				y_row[u_pos: int(next_assists[0]) + 1] = -100
+			else:
+				y_row[u_pos: active_end] = -100
 
 
 class MixtureTokenDataset:
@@ -331,7 +386,7 @@ class MixtureTokenDataset:
 		device: Union[str, torch.device] = "cpu",
 		seq_len_override: Optional[int] = None,
 		sft_masking: bool = False,
-		assistant_token_id: int = 5,
+		assistant_token_id: int = 6,
 	) -> Tuple[torch.Tensor, torch.Tensor]:
 		T = seq_len_override or self.seq_len
 		x_np = np.empty((batch_size, T), dtype=np.int64)
@@ -341,7 +396,14 @@ class MixtureTokenDataset:
 		for i, si in enumerate(src_ids):
 			pool = self.pools[si]
 			arr = pool["arrays"][self.rng.choice(len(pool["arrays"]), p=pool["shard_probs"])]
-			start = int(self.rng.integers(0, max(1, arr.shape[0] - T - 1)))
+			max_start = max(1, arr.shape[0] - T - 1)
+			start = int(self.rng.integers(0, max_start))
+			if sft_masking:
+				lookahead = arr[start: min(max_start, start + T)]
+				bos_hits = np.where(lookahead == 1)[0]
+				if len(bos_hits) > 0:
+					start = min(max_start - 1, start + int(bos_hits[0]))
+
 			segment = np.asarray(arr[start: start + T + 1], dtype=np.int64)
 			if segment.max() >= self.vocab_size:
 				segment %= self.vocab_size

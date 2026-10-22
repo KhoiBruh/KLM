@@ -106,7 +106,8 @@ def diffusion_mask(
 	cfg: FullConfig,
 	mask_token_id: int,
 	is_sft: bool = False,
-	assistant_token_id: int = 5,
+	assistant_token_id: int = 6,
+	sft_targets: Optional[torch.Tensor] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, float]:
 	"""
 	Applies masking noise according to LLaDA principles:
@@ -128,23 +129,30 @@ def diffusion_mask(
 	rand_matrix = torch.rand(bsz, seq_len, device=device)
 	mask = rand_matrix < r
 
-	# Ensure at least one token is masked per row
-	zero_mask = mask.sum(1) == 0
-	if zero_mask.any():
-		num_zeros = int(zero_mask.sum().item())
-		rand_pos = torch.randint(0, seq_len, (num_zeros,), device=device)
-		mask[zero_mask, rand_pos] = True
+	targets = clean_tokens
+	if is_sft and sft_targets is not None:
+		targets = sft_targets
+		# Only mask tokens that are part of supervised assistant response
+		valid_completion = (targets != -100)
+		mask = mask & valid_completion
 
-	if is_sft:
-		# Preserve prompt tokens, only mask completion tokens after <|assistant|>
+		# Ensure at least one token is masked per row where completion exists
 		for b in range(bsz):
-			assist_pos = (clean_tokens[b] == assistant_token_id).nonzero(as_tuple=True)[0]
-			if len(assist_pos) > 0:
-				mask[b, : assist_pos[0] + 1] = False
+			valid_indices = valid_completion[b].nonzero(as_tuple=True)[0]
+			if len(valid_indices) > 0 and not mask[b].any():
+				pick = valid_indices[torch.randint(0, len(valid_indices), (1,), device=device)]
+				mask[b, pick] = True
+	else:
+		# Ensure at least one token is masked per row
+		zero_mask = mask.sum(1) == 0
+		if zero_mask.any():
+			num_zeros = int(zero_mask.sum().item())
+			rand_pos = torch.randint(0, seq_len, (num_zeros,), device=device)
+			mask[zero_mask, rand_pos] = True
 
 	noisy_input = clean_tokens.clone()
 	noisy_input[mask] = mask_token_id
-	return noisy_input, clean_tokens, mask, mean_ratio
+	return noisy_input, targets, mask, mean_ratio
 
 
 @torch.no_grad()
@@ -156,15 +164,21 @@ def evaluate_validation_loss(
 	amp_dtype: torch.dtype,
 	use_amp: bool,
 	mask_token_id: int,
+	assistant_token_id: int = 6,
+	is_sft: bool = False,
 	eval_batches: int = 8,
 ) -> Dict[str, float]:
 	model.eval()
 	losses = []
 	batch_size = max(1, min(cfg.training.micro_batch_size, 16))
 	for _ in range(eval_batches):
-		clean_tokens, _ = val_dataset.sample_batch(batch_size, device)
+		clean_tokens, sft_targets = val_dataset.sample_batch(
+			batch_size, device, sft_masking=is_sft, assistant_token_id=assistant_token_id
+		)
 		noisy_input, targets, mask, _ = diffusion_mask(
-			clean_tokens, cfg, mask_token_id
+			clean_tokens, cfg, mask_token_id, is_sft=is_sft,
+			assistant_token_id=assistant_token_id,
+			sft_targets=sft_targets if is_sft else None,
 		)
 		with torch.amp.autocast(device_type=device.type, dtype=amp_dtype, enabled=use_amp):
 			out = model(input_ids=noisy_input, targets=targets, mask_indices=mask)
@@ -321,11 +335,14 @@ def train(
 			accum_ratio = 0.0
 
 			for _ in range(grad_accum):
-				clean_tokens, _ = train_dataset.sample_batch(micro_bsz, device)
+				clean_tokens, sft_targets = train_dataset.sample_batch(
+					micro_bsz, device, sft_masking=is_sft, assistant_token_id=tokenizer.assistant_id
+				)
 				noisy_input, targets, mask, ratio = diffusion_mask(
 					clean_tokens, cfg,
-					tokenizer.mask_id, is_sft,
-					tokenizer.assistant_id
+					tokenizer.mask_id, is_sft=is_sft,
+					assistant_token_id=tokenizer.assistant_id,
+					sft_targets=sft_targets if is_sft else None,
 				)
 				accum_ratio += ratio / grad_accum
 
@@ -368,7 +385,9 @@ def train(
 			if step % cfg.training.eval_interval == 0 or step == total_steps:
 				val_metrics = evaluate_validation_loss(
 					model, val_dataset, cfg, device,
-					amp_dtype, use_amp, tokenizer.mask_id, 4
+					amp_dtype, use_amp, tokenizer.mask_id,
+					assistant_token_id=tokenizer.assistant_id,
+					is_sft=is_sft, eval_batches=4,
 				)
 				print(
 					f"  >>> [Eval @ Step {step:06d}] val_loss={val_metrics['val_loss']:.4f} | "
@@ -408,7 +427,7 @@ def parse_args() -> argparse.Namespace:
 		"--scale",
 		type=str,
 		default=None,
-		choices=["custom", "10m", "100m", "500m", "1b", "3b", "7b"],
+		choices=["custom", "10m", "100m", "200m", "500m", "1b", "3b", "7b"],
 		help="Quickly switches scale preset",
 	)
 	parser.add_argument("--batch-size", type=int, default=None, help="Overrides micro_batch_size")

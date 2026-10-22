@@ -3,18 +3,18 @@
 # =============================================================================
 
 [model]
-# Scaling preset: "custom" (uses parameters below), or "10m", "100m", "500m", "1b", "3b", "7b"
-scale_preset = "custom"
+# Scaling preset: "custom" (uses parameters below), or "10m", "100m", "200m", "500m", "1b", "3b", "7b"
+scale_preset = "200m"
 
 # Standard LLaDA architecture (Large Language Diffusion with Masking - Bidirectional Transformer)
-# Optimized for the <10M parameter regime (~9.36M params with tied embeddings)
-vocab_size = 4096
-d_model = 256
-n_layers = 12
-n_heads = 8
-n_kv_heads = 2                # Grouped-Query Attention (GQA 4:1)
-head_dim = 32
-d_ff = 688                    # SwiGLU intermediate size (<10M params)
+# Optimized for the ~200M parameter regime (~201.37M params with tied 32K embeddings)
+vocab_size = 32768
+d_model = 768
+n_layers = 28
+n_heads = 12
+n_kv_heads = 4                # Grouped-Query Attention (GQA 3:1)
+head_dim = 64
+d_ff = 2048                   # SwiGLU intermediate size (~201.37M params, Tensor Core aligned)
 max_seq_len = 1024
 rope_theta = 10000.0
 rope_scaling_factor = 1.0

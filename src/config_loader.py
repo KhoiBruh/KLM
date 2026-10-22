@@ -40,6 +40,17 @@ SCALE_PRESETS: Dict[str, Dict[str, Any]] = {
 		"max_seq_len": 2048,
 		"tie_word_embeddings": True,
 	},
+	"200m": {
+		"vocab_size": 32768,
+		"d_model": 768,
+		"n_layers": 28,
+		"n_heads": 12,
+		"n_kv_heads": 4,
+		"head_dim": 64,
+		"d_ff": 2048,
+		"max_seq_len": 1024,
+		"tie_word_embeddings": True,
+	},
 	"500m": {
 		"vocab_size": 32768,
 		"d_model": 1152,
@@ -89,11 +100,11 @@ SCALE_PRESETS: Dict[str, Dict[str, Any]] = {
 
 @dataclass
 class ProjectConfig:
-	name: str = "klm-10m"
+	name: str = "klm-200m"
 	seed: int = 42
 	device: str = "cuda"
 	dtype: str = "bfloat16"
-	compile: bool = True
+	compile: bool = False
 	checkpoint_dir: str = "checkpoints"
 	tokenizer_dir: str = "tokenizer"
 	save_format: str = "safetensors"
@@ -112,14 +123,14 @@ class ProjectConfig:
 
 @dataclass
 class ModelConfig:
-	scale_preset: str = "custom"
-	vocab_size: int = 4096
-	d_model: int = 256
-	n_layers: int = 12
-	n_heads: int = 8
-	n_kv_heads: int = 2
-	head_dim: int = 32
-	d_ff: int = 688
+	scale_preset: str = "200m"
+	vocab_size: int = 32768
+	d_model: int = 768
+	n_layers: int = 28
+	n_heads: int = 12
+	n_kv_heads: int = 4
+	head_dim: int = 64
+	d_ff: int = 2048
 	max_seq_len: int = 1024
 	rope_theta: float = 10000.0
 	rope_scaling_factor: float = 1.0
@@ -302,7 +313,7 @@ class FullConfig:
 		}
 
 	def scale_preset(self, preset_name: str):
-		"""Quickly scales configuration to target size preset (10m, 100m, 500m, 1b, 3b, 7b)."""
+		"""Quickly scales configuration to target size preset (10m, 100m, 200m, 500m, 1b, 3b, 7b)."""
 		preset_key = preset_name.strip().lower()
 		if preset_key not in SCALE_PRESETS:
 			valid = ", ".join(SCALE_PRESETS.keys())
@@ -310,7 +321,7 @@ class FullConfig:
 
 		self.model.scale_preset = preset_key
 		self.model.apply_preset_if_needed()
-		self.project.name = f"slm-killer-{preset_key}"
+		self.project.name = f"klm-{preset_key}"
 
 
 def _filter_dataclass_kwargs(cls: Any, data: Dict[str, Any]) -> Dict[str, Any]:

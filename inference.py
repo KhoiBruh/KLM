@@ -131,14 +131,23 @@ def generate_llada(
 		sys.stdout.flush()
 
 	gen_ids = generated_tensor[0, prompt_len:].tolist()
-	decoded_text = tokenizer.decode(gen_ids).strip()
+	# Truncate at first <|eos|>, <|user|>, or <|pad|> token to eliminate trailing blocks
+	stop_tokens = {tokenizer.eos_id, tokenizer.pad_id, tokenizer.user_id}
+	cut_idx = len(gen_ids)
+	for i, tid in enumerate(gen_ids):
+		if tid in stop_tokens:
+			cut_idx = i
+			break
+
+	trimmed_ids = gen_ids[:cut_idx]
+	decoded_text = tokenizer.decode(trimmed_ids).strip()
 
 	speed = gen_length / elapsed
 	step_speed = steps / elapsed
 
 	print(f"{decoded_text}")
 	print(
-		f"  [LLaDA Sampler: {steps} steps | {gen_length} tokens in {elapsed:.2f}s -> "
+		f"  [LLaDA Sampler: {steps} steps | {len(trimmed_ids)}/{gen_length} tokens in {elapsed:.2f}s -> "
 		f"{speed:.1f} tok/s | {step_speed:.1f} step/s]"
 	)
 	return decoded_text
@@ -209,8 +218,10 @@ def main():
 		return
 
 	print("\n" + "=" * 74)
-	print(" LLADA DIFFUSION SAMPLER INTERACTIVE SHELL (Type 'exit' to quit)")
+	print(" LLADA CONVERSATIONAL INTERACTIVE SHELL (Type 'exit' to quit, '/clear' to reset)")
 	print("=" * 74)
+	history_prompt = ""
+
 	while True:
 		try:
 			user_in = input("\nUser > ").strip()
@@ -223,14 +234,24 @@ def main():
 		if user_in.lower() in ("/exit", "/quit", "exit", "quit"):
 			print("Session exited.")
 			break
+		if user_in.lower() in ("/clear", "/reset", "clear", "reset"):
+			history_prompt = ""
+			print("Context cleared. Started new conversation.")
+			continue
+
+		if not history_prompt:
+			turn_prompt = f"<|bos|><|user|> {user_in} <|assistant|>"
+		else:
+			turn_prompt = f"{history_prompt} <|user|> {user_in} <|assistant|>"
 
 		print("Assistant > ", end="", flush=True)
-		generate_llada(
-			model, tokenizer, user_in, device,
+		assistant_reply = generate_llada(
+			model, tokenizer, turn_prompt, device,
 			args.gen_length, args.steps, args.temperature, args.schedule,
 			stream_enabled, args.show_steps,
 			stage=ckpt_stage,
 		)
+		history_prompt = f"{turn_prompt} {assistant_reply}"
 
 
 if __name__ == "__main__":

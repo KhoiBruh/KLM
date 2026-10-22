@@ -3,11 +3,11 @@
 # =============================================================================
 
 [project]
-name = "klm-10m"
+name = "klm-200m"
 seed = 42
 device = "cuda"               # Automatically falls back to "cpu" if CUDA is unavailable
 dtype = "bfloat16"            # Supported: "float32", "float16", "bfloat16", "fp8"
-compile = true                # Enable torch.compile(mode="max-autotune")
+compile = false               # Set true on Linux servers for torch.compile; false avoids initial autotune lag
 checkpoint_dir = "checkpoints"
 tokenizer_dir = "tokenizer"
 save_format = "safetensors"    # Save weights in standard .safetensors (zero-copy mmap)

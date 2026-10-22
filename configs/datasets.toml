@@ -1,12 +1,12 @@
 # =============================================================================
 # 4. DATASET & MULTI-SOURCE BLENDING CONFIGURATION (configs/datasets.toml)
 # =============================================================================
-# Modern English-Only Post-GPT-4 Dataset Mix (2025-2026 Frontier Recipe)
-# - Pretrain (~225M tokens): FineWeb-Edu + FineMath-4plus + Cosmopedia-v2 + OpenCoder
-# - SFT (~75M tokens)      : OpenThoughts3-1.2M + OpenR1-Math-220k + SmolTalk
+# Balanced 200M Context-Aware & Conversational SLM Recipe
+# - Pretrain (~350M tokens): FineWeb-Edu + Cosmopedia-v2 + TinyStories + FineMath + OpenCoder
+# - SFT (~90M tokens)      : SmolTalk (50%) + UltraChat-200k (35%) + OpenThoughts3 (15%)
 #
 # Usage:
-#   1. Build custom BPE tokenizer from active datasets:
+#   1. Build custom 32K BPE tokenizer from active datasets:
 #      python tokenizer/build_tokenizer.py
 #   2. Pre-tokenize datasets into binary .bin shards:
 #      python prepare_data.py
@@ -14,18 +14,19 @@
 
 [data]
 cache_dir = "data/cache"
-shard_size_tokens = 50_000_000    # ~100MB/shard (uint16) - optimal for 100M-300M budget
+shard_size_tokens = 50_000_000    # ~100MB/shard (uint16) - optimal for 100M-500M budget
 val_ratio = 0.005                 # 0.5% documents reserved for validation
 append_eos = true                 # Append <|eos|> between documents
 prepend_bos = true                # Prepend <|bos|> at document start
 tokenize_batch_size = 1024        # Batch size for multithreaded Rust tokenizer
-synthetic_fallback = true         # Generate synthetic math/reasoning data if no sources exist
+synthetic_fallback = true         # Generate synthetic data if no sources exist
 
 # =============================================================================
-# STAGE 1: PRE-TRAINING SOURCES (~225M Tokens Total)
+# STAGE 1: PRE-TRAINING SOURCES (~350M Tokens Total)
+# Builds deep English fluency, world knowledge, reading comprehension & logic.
 # =============================================================================
 
-# 1. FineWeb-Edu (Score >= 3 Educational Web Knowledge)
+# 1. FineWeb-Edu (Score >= 3 Educational Web Knowledge & Reading Comprehension)
 [[data.sources]]
 name = "fineweb_edu"
 type = "hf"
@@ -34,26 +35,12 @@ hf_config = "sample-10BT"
 hf_split = "train"
 text_field = "text"
 min_chars = 200
-max_tokens = 100_000_000
+max_tokens = 150_000_000
 stages = ["pretrain"]
-weight = 0.45
+weight = 0.43
 enabled = true
 
-# 2. FineMath-4plus (Curated Step-by-Step Mathematical Web Corpus, Score 4-5)
-[[data.sources]]
-name = "finemath_4plus"
-type = "hf"
-hf_name = "HuggingFaceTB/finemath"
-hf_config = "finemath-4plus"
-hf_split = "train"
-text_field = "text"
-min_chars = 150
-max_tokens = 60_000_000
-stages = ["pretrain"]
-weight = 0.25
-enabled = true
-
-# 3. Cosmopedia-v2 (Synthetic Textbooks, College Lectures & Structured Articles)
+# 2. Cosmopedia-v2 (Synthetic Textbooks, Stories, Guides & Structured Articles)
 [[data.sources]]
 name = "cosmopedia_v2"
 type = "hf"
@@ -62,12 +49,40 @@ hf_config = "cosmopedia-v2"
 hf_split = "train"
 text_field = "text"
 min_chars = 200
-max_tokens = 40_000_000
+max_tokens = 100_000_000
 stages = ["pretrain"]
-weight = 0.18
+weight = 0.29
 enabled = true
 
-# 4. OpenCoder Algorithmic Corpus (Python & Algorithmic Code Synthesis)
+# 3. TinyStories (Everyday Narrative Fluency, Dialogue & Commonsense Context)
+[[data.sources]]
+name = "tinystories"
+type = "hf"
+hf_name = "roneneldan/TinyStories"
+hf_config = "default"
+hf_split = "train"
+text_field = "text"
+min_chars = 100
+max_tokens = 40_000_000
+stages = ["pretrain"]
+weight = 0.12
+enabled = true
+
+# 4. FineMath-4plus (Step-by-Step Mathematical & Logical Thinking, Score 4-5)
+[[data.sources]]
+name = "finemath_4plus"
+type = "hf"
+hf_name = "HuggingFaceTB/finemath"
+hf_config = "finemath-4plus"
+hf_split = "train"
+text_field = "text"
+min_chars = 150
+max_tokens = 35_000_000
+stages = ["pretrain"]
+weight = 0.10
+enabled = true
+
+# 5. OpenCoder Algorithmic Corpus (Python & Structured Algorithmic Logic)
 [[data.sources]]
 name = "opencoder_python"
 type = "hf"
@@ -78,15 +93,43 @@ text_field = "text"
 min_chars = 120
 max_tokens = 25_000_000
 stages = ["pretrain"]
-weight = 0.12
+weight = 0.06
 enabled = true
 
 # =============================================================================
-# STAGE 2: SFT & REASONING SOURCES (~75M Tokens Total)
-# Automatically normalizes ShareGPT/OpenAI messages and <think> -> <|think|>
+# STAGE 2: SFT CONVERSATIONAL & CONTEXT ALIGNMENT (~90M Tokens Total)
+# 85% Natural Multi-Turn Dialogue & Instruction + 15% CoT Reasoning
 # =============================================================================
 
-# 5. OpenThoughts3-1.2M (Frontier Math, Code & Science CoT Traces)
+# 6. SmolTalk (Modern Multi-Turn Instruction, Summarization & Everyday Chat)
+[[data.sources]]
+name = "smoltalk_sft"
+type = "hf"
+hf_name = "HuggingFaceTB/smoltalk"
+hf_config = "all"
+hf_split = "train"
+text_field = "messages"
+min_chars = 48
+max_tokens = 45_000_000
+stages = ["sft"]
+weight = 0.50
+enabled = true
+
+# 7. UltraChat-200k (Rich Multi-Turn Human-Like Conversations & Context Tracking)
+[[data.sources]]
+name = "ultrachat_sft"
+type = "hf"
+hf_name = "HuggingFaceH4/ultrachat_200k"
+hf_config = "default"
+hf_split = "train_sft"
+text_field = "messages"
+min_chars = 64
+max_tokens = 30_000_000
+stages = ["sft"]
+weight = 0.35
+enabled = true
+
+# 8. OpenThoughts3-1.2M (Concise CoT Reasoning for Logic & Science Questions)
 [[data.sources]]
 name = "openthoughts3"
 type = "hf"
@@ -95,12 +138,12 @@ hf_config = "default"
 hf_split = "train"
 text_field = "conversations"
 min_chars = 128
-max_tokens = 35_000_000
+max_tokens = 15_000_000
 stages = ["sft"]
-weight = 0.45
+weight = 0.15
 enabled = true
 
-# 6. OpenR1-Math-220k (Verified DeepSeek-R1 Mathematical Reasoning Traces)
+# 9. OpenR1-Math-220k (Disabled by default so heavy LaTeX does not overpower natural chat)
 [[data.sources]]
 name = "openr1_math"
 type = "hf"
@@ -109,33 +152,19 @@ hf_config = "default"
 hf_split = "train"
 text_field = "messages"
 min_chars = 128
-max_tokens = 25_000_000
+max_tokens = 10_000_000
 stages = ["sft"]
-weight = 0.35
-enabled = true
-
-# 7. SmolTalk (Modern Multi-Turn Instruction & Chat Alignment)
-[[data.sources]]
-name = "smoltalk_sft"
-type = "hf"
-hf_name = "HuggingFaceTB/smoltalk"
-hf_config = "all"
-hf_split = "train"
-text_field = "messages"
-min_chars = 64
-max_tokens = 15_000_000
-stages = ["sft"]
-weight = 0.20
-enabled = true
+weight = 0.0
+enabled = false
 
 # =============================================================================
 # DYNAMIC DATA BLENDING SCHEDULE (WSD DATA ANNEALING / CURRICULUM)
-# Boosts math & code reasoning density during the final 15% WSD LR decay phase.
+# Focuses on high-clarity structured textbooks & knowledge during final 20% decay.
 # =============================================================================
 [[data.phases]]
-until = 0.85
-weights = { fineweb_edu = 0.45, finemath_4plus = 0.25, cosmopedia_v2 = 0.18, opencoder_python = 0.12 }
+until = 0.80
+weights = { fineweb_edu = 0.43, cosmopedia_v2 = 0.29, tinystories = 0.12, finemath_4plus = 0.10, opencoder_python = 0.06 }
 
 [[data.phases]]
 until = 1.0
-weights = { fineweb_edu = 0.25, finemath_4plus = 0.40, cosmopedia_v2 = 0.15, opencoder_python = 0.20 }
+weights = { fineweb_edu = 0.40, cosmopedia_v2 = 0.35, tinystories = 0.07, finemath_4plus = 0.11, opencoder_python = 0.07 }

@@ -81,15 +81,24 @@ def _render_messages(messages: List[Dict[str, Any]]) -> str:
 	`conversations=[{from, value}]` into KLM chat & reasoning special tokens.
 	"""
 	parts: List[str] = []
+	system_prefix = ""
 	for m in messages:
 		raw_role = str(m.get("role") or m.get("from") or "user").strip().lower()
 		raw_content = m.get("content") if m.get("content") is not None else m.get("value", "")
 		content = _normalize_reasoning_tags(str(raw_content).strip())
 		if not content:
 			continue
+		if raw_role == "system":
+			system_prefix = f"{content}\n" if not system_prefix else f"{system_prefix}{content}\n"
+			continue
 		is_assistant = raw_role in ("assistant", "gpt", "bot", "model")
-		tag = "<|assistant|>" if is_assistant else "<|user|>"
-		parts.append(f"{tag} {content}")
+		if is_assistant:
+			parts.append(f"<|assistant|> {content}")
+		else:
+			if system_prefix:
+				content = f"{system_prefix}{content}"
+				system_prefix = ""
+			parts.append(f"<|user|> {content}")
 	return " ".join(parts)
 
 

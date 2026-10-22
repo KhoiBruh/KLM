@@ -4,37 +4,37 @@
 
 [optimizer]
 # Hybrid Muon (for 2D hidden weight matrices) + AdamW (for Embeddings, Norms, Biases)
-muon_lr = 0.02
+muon_lr = 0.015
 muon_momentum = 0.95
 muon_ns_steps = 5             # 5th-order Newton-Schulz orthogonalization steps
-adamw_lr = 0.003
+adamw_lr = 0.0015
 weight_decay = 0.01
 betas = [0.9, 0.95]
 grad_clip = 1.0
 
 [training]
-stage = "pretrain"            # Mode: "pretrain", "sft"
-micro_batch_size = 64         # Optimized for RTX 3050 4GB (~2.6GB VRAM)
-grad_accum_steps = 8          # Global batch = 64 * 8 = 512 sequences
-total_steps = 100000
-warmup_ratio = 0.05           # WSD schedule: 5% Warmup -> 45% Stable -> 50% Cosine Decay
-stable_ratio = 0.45
-decay_ratio = 0.50
+stage = "pretrain"            # Mode: "pretrain", "sft", "grpo"
+micro_batch_size = 64         # Optimal for A100 / RTX 6000 with 200M model & 32K vocab
+grad_accum_steps = 4          # Global batch = 64 * 4 = 256 sequences (262,144 tokens/step)
+total_steps = 3000            # 3000 pretrain steps (~786M tokens processed)
+warmup_ratio = 0.05           # WSD schedule: 5% Warmup -> 70% Stable -> 25% Cosine Decay
+stable_ratio = 0.70
+decay_ratio = 0.25
 
 # Masked Diffusion configuration
 mask_ratio_min = 0.15         # Minimum masking ratio during training
 mask_ratio_max = 0.85         # Maximum masking ratio (preserves >=15% context tokens)
 noise_schedule = "cosine"     # Noise schedule: "uniform" or "cosine"
 
-gradient_checkpointing = true # Reduces VRAM footprint
+gradient_checkpointing = true # Keeps 28-layer 200M activation memory compact (~14GB VRAM)
 distributed_strategy = "auto" # "auto", "none", "ddp", "fsdp"
 low_cpu_mem_usage = false
-eval_interval = 1000
-save_interval = 50
+eval_interval = 200
+save_interval = 250
 
 [rl_grpo]
 group_size = 8
 kl_coef = 0.04
-max_gen_len = 256
-learning_rate = 1e-5
-steps = 2000
+max_gen_len = 128
+learning_rate = 5e-6
+steps = 200

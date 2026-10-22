@@ -107,7 +107,7 @@ def print_multi_billion_scale_table(base_cfg: FullConfig):
 	)
 	print("-" * 88)
 
-	for preset_name in ("10m", "100m", "500m", "1b", "3b", "7b"):
+	for preset_name in ("10m", "100m", "200m", "500m", "1b", "3b", "7b"):
 		cfg_copy = copy.deepcopy(base_cfg)
 		cfg_copy.scale_preset(preset_name)
 		stats = est_config_params(cfg_copy)
@@ -129,7 +129,7 @@ def main():
 		"--scale",
 		type=str,
 		default=None,
-		choices=["custom", "10m", "100m", "500m", "1b", "3b", "7b"],
+		choices=["custom", "10m", "100m", "200m", "500m", "1b", "3b", "7b"],
 		help="Verify configuration according to a scale preset",
 	)
 	parser.add_argument(
