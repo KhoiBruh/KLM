@@ -208,15 +208,20 @@ def _iter_hf(src: DataSourceConfig) -> Iterator[str]:
 		yield from _iter_hf_http_fallback(src)
 		return
 
-	ds = load_dataset(
-		src.hf_name,
-		name=src.hf_config or None,
-		split=src.hf_split,
-		revision=src.hf_revision or None,
-		streaming=True,
-	)
-	for record in ds:
-		yield _record_to_text(record, src)
+	try:
+		ds = load_dataset(
+			src.hf_name,
+			name=src.hf_config or None,
+			split=src.hf_split,
+			revision=src.hf_revision or None,
+			streaming=True,
+		)
+		for record in ds:
+			yield _record_to_text(record, src)
+	except GeneratorExit:
+		return
+	except Exception:
+		return
 
 
 READERS = {
@@ -235,13 +240,18 @@ def iter_documents(src: DataSourceConfig) -> Iterator[str]:
 		)
 
 	count = 0
-	for doc in reader(src):
-		if len(doc) < max(1, src.min_chars):
-			continue
-		yield doc
-		count += 1
-		if src.max_docs and count >= src.max_docs:
-			break
+	try:
+		for doc in reader(src):
+			if len(doc) < max(1, src.min_chars):
+				continue
+			yield doc
+			count += 1
+			if src.max_docs and count >= src.max_docs:
+				break
+	except GeneratorExit:
+		return
+	except Exception:
+		return
 
 
 # --------------------------------------------------------------------------- #
