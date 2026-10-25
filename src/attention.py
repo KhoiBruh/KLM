@@ -10,7 +10,6 @@ LLaDA (Large Language Diffusion with Masking) uses a Bidirectional Transformer:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Optional, Tuple
 
 import torch
@@ -31,6 +30,7 @@ def repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
 	"""Repeat Key/Value heads for Grouped-Query Attention (GQA): `(B, n_kv_heads, T, D) -> (B, n_heads, T, D)`."""
 	if n_rep == 1:
 		return x
+
 	bsz, n_kv_heads, seq_len, head_dim = x.shape
 	return (
 		x[:, :, None, :, :]
@@ -102,9 +102,6 @@ class BidirectionalGQA(Module):
 
 		attn_out = attn_out.transpose(1, 2).contiguous().view(bsz, seq_len, self.q_dim)
 		return self.o_proj(attn_out)
-
-# Backward compatibility alias
-GatedGQA = BidirectionalGQA
 
 
 class TransformerBlock(Module):

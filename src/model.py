@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Union
+from typing import Callable, Optional, Union
 
 import torch
 import torch.nn as nn
@@ -21,14 +21,12 @@ from torch.utils.checkpoint import checkpoint
 
 from .attention import (
 	BidirectionalGQA,
-	GatedGQA,
 	TransformerBlock,
 )
 from .checkpoint import (
 	_unwrap_model,
 	count_params,
 	est_config_params,
-	has_checkpoint,
 	load_checkpoint,
 	save_checkpoint,
 )
@@ -343,7 +341,6 @@ __all__ = [
 	"RotaryEmbed",
 	"SwiGLUMLP",
 	"BidirectionalGQA",
-	"GatedGQA",
 	"TransformerBlock",
 	"ModelOutput",
 	"KLMModel",
