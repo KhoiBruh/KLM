@@ -165,6 +165,8 @@ def main():
 	parser.add_argument("--schedule", type=str, default="cosine", choices=["cosine", "linear"], help="Unmasking schedule")
 	parser.add_argument("--no-stream", action="store_true", help="Disable live denoising streaming")
 	parser.add_argument("--show-steps", action="store_true", help="Print each step on a new line instead of in-place overwrite")
+	parser.add_argument("--stage", type=str, default=None, choices=["pretrain", "sft", "grpo"], help="Override stage (default: auto from checkpoint or config)")
+	parser.add_argument("--no-history", action="store_true", help="Do not accumulate multi-turn history (recommended for early checkpoints to prevent context contamination)")
 	args = parser.parse_args()
 
 	cfg = load_config(args.config)
@@ -181,11 +183,11 @@ def main():
 	)
 	model = KLMModel(cfg).to(device)
 
-	ckpt_stage = cfg.training.stage.lower()
+	ckpt_stage = args.stage or cfg.training.stage.lower()
 	if has_checkpoint(ckpt_dir):
 		try:
 			info = load_checkpoint(model, ckpt_dir, device)
-			ckpt_stage = str(info.get("stage", ckpt_stage)).lower()
+			ckpt_stage = args.stage or str(info.get("stage", ckpt_stage)).lower()
 			print(
 				f"[Inference] Loaded Safetensors weights from '{info['loaded_from']}' "
 				f"(step={info['step']}, stage={ckpt_stage})."
@@ -243,7 +245,7 @@ def main():
 			print("Context cleared. Started new conversation.")
 			continue
 
-		if not history_prompt:
+		if not history_prompt or args.no_history:
 			turn_prompt = f"<|bos|><|user|> {user_in} <|assistant|>"
 		else:
 			turn_prompt = f"{history_prompt} <|user|> {user_in} <|assistant|>"
@@ -255,7 +257,10 @@ def main():
 			stream_enabled, args.show_steps,
 			stage=ckpt_stage,
 		)
-		history_prompt = f"{turn_prompt} {assistant_reply}"
+		if args.no_history:
+			history_prompt = ""
+		else:
+			history_prompt = f"{turn_prompt} {assistant_reply} <|eos|>"
 
 
 if __name__ == "__main__":
