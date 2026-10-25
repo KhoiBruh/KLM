@@ -23,7 +23,7 @@ decay_ratio = 0.25
 
 # Masked Diffusion configuration
 mask_ratio_min = 0.15         # Minimum masking ratio during training
-mask_ratio_max = 0.85         # Maximum masking ratio (preserves >=15% context tokens)
+mask_ratio_max = 1.0          # Maximum masking ratio (enables full-noise denoising)
 noise_schedule = "cosine"     # Noise schedule: "uniform" or "cosine"
 
 gradient_checkpointing = true # Keeps 28-layer 200M activation memory compact (~14GB VRAM)

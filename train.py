@@ -23,7 +23,7 @@ import torch.distributed as dist
 import torch.nn as nn
 
 from src.config_loader import FullConfig, load_config
-from src.dataset import MemmapTokenDataset
+from src.dataset import MemmapTokenDataset, build_document_attention_mask
 from src.model import (
 	KLMModel,
 	count_params,
@@ -108,10 +108,15 @@ def diffusion_mask(
 	is_sft: bool = False,
 	assistant_token_id: int = 6,
 	sft_targets: Optional[torch.Tensor] = None,
+	bos_token_id: int = 1,
+	pad_token_id: int = 0,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, float]:
 	"""
-	Applies masking noise according to LLaDA principles:
-	Samples masking ratio r ~ [r_min, r_max], randomly replaces tokens with `mask_token_id`.
+	Applies masking noise according to discrete masked diffusion (LLaDA):
+	- Samples masking ratio r ~ [r_min, r_max], replaces tokens with `mask_token_id`.
+	- Excludes padding tokens (<|pad|>) from masking and ignores them in loss computation (-100).
+	- Preserves <|bos|> at sequence index 0 during pretraining to maintain directional anchoring.
+	- During SFT, only masks assistant response completion spans.
 	"""
 	bsz, seq_len = clean_tokens.shape
 	device = clean_tokens.device
@@ -129,26 +134,40 @@ def diffusion_mask(
 	rand_matrix = torch.rand(bsz, seq_len, device=device)
 	mask = rand_matrix < r
 
-	targets = clean_tokens
+	# Exclude PAD tokens from masking
+	is_pad = (clean_tokens == pad_token_id)
+	mask = mask & (~is_pad)
+
+	targets = clean_tokens.clone()
+	if is_pad.any():
+		targets[is_pad] = -100
+
 	if is_sft and sft_targets is not None:
-		targets = sft_targets
-		# Only mask tokens that are part of supervised assistant response
-		valid_completion = (targets != -100)
+		targets = sft_targets.clone()
+		valid_completion = (targets != -100) & (~is_pad)
 		mask = mask & valid_completion
 
-		# Ensure at least one token is masked per row where completion exists
 		for b in range(bsz):
 			valid_indices = valid_completion[b].nonzero(as_tuple=True)[0]
 			if len(valid_indices) > 0 and not mask[b].any():
 				pick = valid_indices[torch.randint(0, len(valid_indices), (1,), device=device)]
 				mask[b, pick] = True
 	else:
-		# Ensure at least one token is masked per row
-		zero_mask = mask.sum(1) == 0
+		# Protect leading BOS token to anchor sequence context
+		is_bos_at_start = (clean_tokens[:, 0] == bos_token_id)
+		mask[is_bos_at_start, 0] = False
+
+		valid_tokens = (~is_pad)
+		if is_bos_at_start.any():
+			valid_tokens[is_bos_at_start, 0] = False
+
+		zero_mask = (mask.sum(dim=1) == 0) & (valid_tokens.sum(dim=1) > 0)
 		if zero_mask.any():
-			num_zeros = int(zero_mask.sum().item())
-			rand_pos = torch.randint(0, seq_len, (num_zeros,), device=device)
-			mask[zero_mask, rand_pos] = True
+			for b in zero_mask.nonzero(as_tuple=True)[0]:
+				cands = valid_tokens[b].nonzero(as_tuple=True)[0]
+				if len(cands) > 0:
+					pick = cands[torch.randint(0, len(cands), (1,), device=device)]
+					mask[b, pick] = True
 
 	noisy_input = clean_tokens.clone()
 	noisy_input[mask] = mask_token_id
@@ -180,8 +199,13 @@ def evaluate_validation_loss(
 			assistant_token_id=assistant_token_id,
 			sft_targets=sft_targets if is_sft else None,
 		)
+		attn_mask = build_document_attention_mask(
+			clean_tokens,
+			eos_token_id=getattr(cfg.model, "eos_token_id", 2),
+			pad_token_id=getattr(cfg.model, "pad_token_id", 0),
+		)
 		with torch.amp.autocast(device_type=device.type, dtype=amp_dtype, enabled=use_amp):
-			out = model(input_ids=noisy_input, targets=targets, mask_indices=mask)
+			out = model(input_ids=noisy_input, targets=targets, mask_indices=mask, attention_mask=attn_mask)
 			if out.loss is not None:
 				losses.append(float(out.loss.item()))
 
@@ -343,11 +367,19 @@ def train(
 					tokenizer.mask_id, is_sft=is_sft,
 					assistant_token_id=tokenizer.assistant_id,
 					sft_targets=sft_targets if is_sft else None,
+					bos_token_id=tokenizer.bos_id,
+					pad_token_id=tokenizer.pad_id,
 				)
 				accum_ratio += ratio / grad_accum
 
+				attn_mask = build_document_attention_mask(
+					clean_tokens,
+					eos_token_id=tokenizer.eos_id,
+					pad_token_id=tokenizer.pad_id,
+				)
+
 				with torch.amp.autocast(device.type, amp_dtype, use_amp):
-					out = model(input_ids=noisy_input, targets=targets, mask_indices=mask)
+					out = model(input_ids=noisy_input, targets=targets, mask_indices=mask, attention_mask=attn_mask)
 					assert out.loss is not None
 					loss = out.loss / grad_accum
 

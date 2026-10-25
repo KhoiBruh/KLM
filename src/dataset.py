@@ -28,6 +28,42 @@ def _select_memmap_dtype(vocab_size: int) -> np.dtype:
 	return np.dtype(np.uint16) if vocab_size <= 65535 else np.dtype(np.uint32)
 
 
+def build_document_attention_mask(
+	tokens: torch.Tensor,
+	eos_token_id: int = 2,
+	pad_token_id: int = 0,
+) -> torch.Tensor:
+	"""
+	Constructs a (B, 1, T, T) boolean document attention mask for Bidirectional Attention:
+	- Tokens only attend to other tokens within the same document (delimited by <|eos|>).
+	- Completely prevents cross-document semantic contamination during continuous-stream pretraining.
+	- Padding tokens (<|pad|>) cannot attend or be attended to.
+	- The diagonal is strictly kept True to prevent NaNs in softmax when rows have no valid tokens.
+	"""
+	bsz, seq_len = tokens.shape
+	device = tokens.device
+
+	is_eos = (tokens == eos_token_id)
+	is_pad = (tokens == pad_token_id)
+
+	# Cumulative sum increments document index after each <|eos|>
+	doc_ids = torch.cumsum(is_eos, dim=-1) - is_eos.long()
+
+	# Tokens belong to the same document if doc_ids match
+	same_doc = (doc_ids.unsqueeze(-1) == doc_ids.unsqueeze(-2))
+
+	# Exclude pad tokens from participating in document cross-attention
+	not_pad = ~is_pad
+	valid_mask = same_doc & not_pad.unsqueeze(-1) & not_pad.unsqueeze(-2)
+
+	# Ensure diagonal is always True so that every query has at least one valid key
+	diag = torch.eye(seq_len, dtype=torch.bool, device=device).unsqueeze(0)
+	valid_mask = valid_mask | diag
+
+	return valid_mask.unsqueeze(1)  # (B, 1, T, T)
+
+
+
 def generate_synthetic_corpus_bin(
 	bin_path: Path,
 	cfg: FullConfig,
@@ -49,7 +85,7 @@ def generate_synthetic_corpus_bin(
 	while len(buffer) < num_tokens:
 		mode = rng.randint(0, 3)
 		if mode == 0:
-			# 2-step arithmetic problem
+			# Multi-step arithmetic explanation
 			a = rng.randint(10, 500)
 			b = rng.randint(5, 200)
 			c = rng.randint(2, 25)
@@ -57,22 +93,21 @@ def generate_synthetic_corpus_bin(
 			step1 = (a + b) if op1 == "+" else (a - b)
 			ans = step1 * c
 			text = (
-				f"<|bos|><|user|> Calculate: ({a} {op1} {b}) * {c} <|assistant|>"
-				f"<|think|> Step 1: {a} {op1} {b} = {step1}. Step 2: {step1} * {c} = {ans}. <|/think|>"
-				f"<|answer|> {ans} <|eos|>\n"
+				f"<|bos|>Arithmetic Explanation: Evaluating ({a} {op1} {b}) * {c}. "
+				f"First calculate inside parentheses: {a} {op1} {b} = {step1}. "
+				f"Then multiply {step1} by {c} to yield {ans}. "
+				f"The result is {ans}.<|eos|>\n"
 			)
 		elif mode == 1:
-			# Sequence induction
+			# Number sequences
 			start = rng.randint(1, 30)
 			diff = rng.randint(2, 15)
 			seq = [start + i * diff for i in range(5)]
 			nxt = start + 5 * diff
 			seq_str = ", ".join(str(x) for x in seq)
 			text = (
-				f"<|bos|><|user|> Find the next number in the sequence: {seq_str}, ? <|assistant|>"
-				f"<|think|> Common difference is {seq[1]} - {seq[0]} = {diff}. "
-				f"Next term: {seq[-1]} + {diff} = {nxt}. <|/think|>"
-				f"<|answer|> {nxt} <|eos|>\n"
+				f"<|bos|>Sequence Induction: Arithmetic sequence with initial term {start} and difference {diff}: "
+				f"{seq_str}. The next consecutive term is {nxt}.<|eos|>\n"
 			)
 		elif mode == 2:
 			# Linear equation solving
@@ -81,24 +116,21 @@ def generate_synthetic_corpus_bin(
 			b = rng.randint(1, 50)
 			rhs = m * x_val + b
 			text = (
-				f"<|bos|><|user|> Solve for x: {m} * x + {b} = {rhs} <|assistant|>"
-				f"<|think|> {m} * x = {rhs} - {b} = {rhs - b}. "
-				f"x = {rhs - b} / {m} = {x_val}. <|/think|>"
-				f"<|answer|> {x_val} <|eos|>\n"
+				f"<|bos|>Algebraic Derivation: Given {m} * x + {b} = {rhs}. "
+				f"Subtracting {b} gives {m} * x = {rhs - b}. "
+				f"Dividing by {m} yields x = {x_val}.<|eos|>\n"
 			)
 		else:
-			# Word problem reasoning
-			apples = rng.randint(12, 90)
-			bought = rng.randint(5, 45)
-			shared = rng.randint(2, 10)
-			total = apples + bought - shared
-			text = (
-				f"<|bos|><|user|> Lan has {apples} books, buys {bought} more, and gives {shared} away. "
-				f"How many books are left? <|assistant|>"
-				f"<|think|> {apples} + {bought} = {apples + bought}. "
-				f"{apples + bought} - {shared} = {total}. <|/think|>"
-				f"<|answer|> {total} <|eos|>\n"
-			)
+			# Factual concepts and reasoning
+			concepts = [
+				("LLaDA Discrete Diffusion", "denoises masked discrete tokens iteratively across bidirectional transformer layers."),
+				("Bidirectional Attention", "enables each position to access both preceding and following tokens simultaneously."),
+				("Muon Optimizer", "applies fifth-order Newton-Schulz orthogonalization to optimize 2D parameter weights rapidly."),
+				("QK-Norm Normalization", "stabilizes attention variance and prevents entropy explosion in deep diffusion transformers."),
+				("Cơ chế chú ý hai chiều", "cho phép mô hình ngôn ngữ hiểu đồng thời toàn bộ ngữ cảnh hai phía của câu."),
+			]
+			term, desc = rng.choice(concepts)
+			text = f"<|bos|>Knowledge: {term} {desc}<|eos|>\n"
 
 		ids = tok.encode(text)
 		buffer.extend(ids)
@@ -192,13 +224,12 @@ class MemmapTokenDataset(Dataset):
 
 	def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
 		mmap = self._open_memmap()
-		start = (idx * self.seq_len) % max(1, self.total_tokens - self.seq_len - 1)
-		chunk = np.asarray(mmap[start: start + self.seq_len + 1], dtype=np.int64)
+		start = (idx * self.seq_len) % max(1, self.total_tokens - self.seq_len)
+		chunk = np.asarray(mmap[start: start + self.seq_len], dtype=np.int64)
 		if chunk.max() >= self.vocab_size:
 			chunk = chunk % self.vocab_size
-		x = torch.from_numpy(chunk[:-1])
-		y = torch.from_numpy(chunk[1:])
-		return x, y
+		x = torch.from_numpy(chunk)
+		return x, x
 
 	def sample_batch(
 		self,
@@ -213,34 +244,43 @@ class MemmapTokenDataset(Dataset):
 		"""
 		mmap = self._open_memmap()
 		T = seq_len_override if seq_len_override is not None else self.seq_len
-		max_start = max(1, self.total_tokens - T - 1)
+		max_start = max(1, self.total_tokens - T)
 		starts = np.random.randint(0, max_start, size=(batch_size,))
 
 		x_np = np.empty((batch_size, T), dtype=np.int64)
-		y_np = np.empty((batch_size, T), dtype=np.int64)
+		sft_targets_np = np.empty((batch_size, T), dtype=np.int64) if sft_masking else None
 
 		for i, s in enumerate(starts):
 			s_idx = int(s)
-			if sft_masking:
-				lookahead = mmap[s_idx: min(max_start, s_idx + T)]
-				bos_hits = np.where(lookahead == 1)[0]
-				if len(bos_hits) > 0:
-					s_idx = min(max_start - 1, s_idx + int(bos_hits[0]))
+			# Align to document start (<|bos|>, id=1) if nearby within window T
+			lookahead = mmap[s_idx: min(self.total_tokens, s_idx + T)]
+			bos_hits = np.where(lookahead == 1)[0]
+			if len(bos_hits) > 0 and (sft_masking or bos_hits[0] > 0):
+				s_idx = min(max_start - 1, s_idx + int(bos_hits[0]))
 
-			segment = mmap[s_idx: s_idx + T + 1].astype(np.int64)
+			segment = mmap[s_idx: s_idx + T].astype(np.int64)
+			if len(segment) < T:
+				padded = np.zeros(T, dtype=np.int64)
+				padded[:len(segment)] = segment
+				segment = padded
 			if segment.max() >= self.vocab_size:
 				segment = segment % self.vocab_size
-			x_np[i] = segment[:-1]
-			y_np[i] = segment[1:]
+			x_np[i] = segment
 
 			if sft_masking:
-				_apply_sft_mask(x_np[i], y_np[i], assistant_token_id)
+				sft_targets_np[i] = segment.copy()
+				_apply_sft_mask(x_np[i], sft_targets_np[i], assistant_token_id)
 
 		x = torch.from_numpy(x_np)
-		y = torch.from_numpy(y_np)
+		y = torch.from_numpy(sft_targets_np) if sft_masking else None
 		if torch.device(device).type == "cuda":
-			x, y = x.pin_memory(), y.pin_memory()
-		return x.to(device=device, non_blocking=True), y.to(device=device, non_blocking=True)
+			x = x.pin_memory()
+			if y is not None:
+				y = y.pin_memory()
+		return (
+			x.to(device=device, non_blocking=True),
+			y.to(device=device, non_blocking=True) if y is not None else None,
+		)
 
 
 def _apply_sft_mask(
@@ -390,35 +430,41 @@ class MixtureTokenDataset:
 	) -> Tuple[torch.Tensor, torch.Tensor]:
 		T = seq_len_override or self.seq_len
 		x_np = np.empty((batch_size, T), dtype=np.int64)
-		y_np = np.empty((batch_size, T), dtype=np.int64)
+		sft_targets_np = np.empty((batch_size, T), dtype=np.int64) if sft_masking else None
 
 		src_ids = self.rng.choice(len(self.pools), size=batch_size, p=self.source_probs)
 		for i, si in enumerate(src_ids):
 			pool = self.pools[si]
 			arr = pool["arrays"][self.rng.choice(len(pool["arrays"]), p=pool["shard_probs"])]
-			max_start = max(1, arr.shape[0] - T - 1)
+			max_start = max(1, arr.shape[0] - T)
 			start = int(self.rng.integers(0, max_start))
-			if sft_masking:
-				lookahead = arr[start: min(max_start, start + T)]
-				bos_hits = np.where(lookahead == 1)[0]
-				if len(bos_hits) > 0:
-					start = min(max_start - 1, start + int(bos_hits[0]))
+			# Align to document start (<|bos|>, id=1) if nearby within window T
+			lookahead = arr[start: min(arr.shape[0], start + T)]
+			bos_hits = np.where(lookahead == 1)[0]
+			if len(bos_hits) > 0 and (sft_masking or bos_hits[0] > 0):
+				start = min(max_start - 1, start + int(bos_hits[0]))
 
-			segment = np.asarray(arr[start: start + T + 1], dtype=np.int64)
+			segment = np.asarray(arr[start: start + T], dtype=np.int64)
+			if len(segment) < T:
+				padded = np.zeros(T, dtype=np.int64)
+				padded[:len(segment)] = segment
+				segment = padded
 			if segment.max() >= self.vocab_size:
 				segment %= self.vocab_size
 
-			x_np[i] = segment[:-1]
-			y_np[i] = segment[1:]
+			x_np[i] = segment
 			if sft_masking:
-				_apply_sft_mask(x_np[i], y_np[i], assistant_token_id)
+				sft_targets_np[i] = segment.copy()
+				_apply_sft_mask(x_np[i], sft_targets_np[i], assistant_token_id)
 
 		x = torch.from_numpy(x_np)
-		y = torch.from_numpy(y_np)
+		y = torch.from_numpy(sft_targets_np) if sft_masking else None
 		if torch.device(device).type == "cuda":
-			x, y = x.pin_memory(), y.pin_memory()
+			x = x.pin_memory()
+			if y is not None:
+				y = y.pin_memory()
 
 		return (
 			x.to(device, non_blocking=True),
-			y.to(device, non_blocking=True)
+			y.to(device, non_blocking=True) if y is not None else None,
 		)

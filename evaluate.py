@@ -160,6 +160,7 @@ def main():
 	from src.rl_env import VerifiableMathLogicEnv
 	from tokenizer.build_tokenizer import Tokenizer
 	from train import diffusion_mask
+	from src.dataset import build_document_attention_mask
 
 	device = torch.device(
 		"cuda" if (cfg.project.device.lower().startswith("cuda") and torch.cuda.is_available())
@@ -216,9 +217,13 @@ def main():
 		for _ in range(6):
 			clean_tokens, _ = val_dataset.sample_batch(batch_size, device)
 			noisy_input, targets, mask, _ = diffusion_mask(
-				clean_tokens, cfg, mask_token_id=tokenizer.mask_id, is_sft=False
+				clean_tokens, cfg, mask_token_id=tokenizer.mask_id, is_sft=False,
+				bos_token_id=tokenizer.bos_id, pad_token_id=tokenizer.pad_id
 			)
-			out = model(input_ids=noisy_input, targets=targets, mask_indices=mask)
+			attn_mask = build_document_attention_mask(
+				clean_tokens, eos_token_id=tokenizer.eos_id, pad_token_id=tokenizer.pad_id
+			)
+			out = model(input_ids=noisy_input, targets=targets, mask_indices=mask, attention_mask=attn_mask)
 			if out.loss is not None:
 				losses.append(float(out.loss.item()))
 
