@@ -4,7 +4,6 @@ Core Layers & Primitives
 Foundational neural network modules:
 - `RMSNorm`: High-performance Root Mean Square Layer Normalization.
 - `RotaryEmbed` & `rotary_pos_emb`: Rotary Position Embedding (RoPE) with dynamic context extension.
-- `DepthwiseShortConv`: Causal depthwise 1D convolution helper.
 - `SwiGLUMLP`: SwiGLU feed-forward network.
 """
 
@@ -97,61 +96,6 @@ def rotary_pos_emb(
 	q_embed = (q * cos) + (rotate_half(q) * sin)
 	k_embed = (k * cos) + (rotate_half(k) * sin)
 	return q_embed, k_embed
-
-
-class DepthwiseShortConv(nn.Module):
-	"""Causal depthwise 1D convolution helper."""
-
-	def __init__(self, d_model: int, kernel_size: int = 5):
-		super().__init__()
-		self.d_model = d_model
-		self.kernel_size = kernel_size
-		self.conv = nn.Conv1d(
-			in_channels=d_model,
-			out_channels=d_model,
-			kernel_size=kernel_size,
-			padding=kernel_size - 1,
-			groups=d_model,
-			bias=False,
-		)
-
-	def forward(
-		self,
-		x: torch.Tensor,
-		conv_state: Optional[torch.Tensor] = None,
-		use_cache: bool = False,
-	) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
-		bsz, seq_len, _ = x.shape
-		x_t = x.transpose(1, 2)  # (B, D, T)
-
-		if conv_state is not None and seq_len == 1:
-			padded = torch.cat([conv_state, x_t], dim=-1)
-			out = F.conv1d(
-				padded, self.conv.weight, bias=None, stride=1, padding=0, groups=self.d_model
-			)
-			new_state = padded[:, :, 1:].detach() if use_cache else None
-			return out.transpose(1, 2), new_state
-
-		if conv_state is not None:
-			padded = torch.cat([conv_state, x_t], dim=-1)
-			out = F.conv1d(
-				padded, self.conv.weight, bias=None, stride=1, padding=0, groups=self.d_model
-			)
-		else:
-			out = self.conv(x_t)[..., :seq_len]
-
-		new_state: Optional[torch.Tensor] = None
-		if use_cache and self.kernel_size > 1:
-			pad_len = self.kernel_size - 1
-			if seq_len >= pad_len:
-				new_state = x_t[:, :, -pad_len:].detach()
-			else:
-				zeros = torch.zeros(
-					bsz, self.d_model, pad_len - seq_len, device=x.device, dtype=x.dtype
-				)
-				new_state = torch.cat([zeros, x_t], dim=-1).detach()
-
-		return out.transpose(1, 2), new_state
 
 
 class SwiGLUMLP(nn.Module):

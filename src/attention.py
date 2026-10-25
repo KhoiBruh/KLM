@@ -27,18 +27,6 @@ from .layers import (
 )
 
 
-@dataclass
-class LayerKVCache:
-	"""Legacy container kept for type compatibility."""
-	k: torch.Tensor
-	v: torch.Tensor
-	conv_state: Optional[torch.Tensor] = None
-
-	@property
-	def seq_len(self) -> int:
-		return int(self.k.shape[2])
-
-
 def repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
 	"""Repeat Key/Value heads for Grouped-Query Attention (GQA): `(B, n_kv_heads, T, D) -> (B, n_heads, T, D)`."""
 	if n_rep == 1:
@@ -51,12 +39,12 @@ def repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
 	)
 
 
-class GatedGQA(Module):
+class BidirectionalGQA(Module):
 	"""
 	Bidirectional Grouped-Query Attention (GQA) for LLaDA:
-	- Full bidirectional attention between masked tokens and unmasked context.
-	- QK-Norm (`RMSNorm` on Q and K) prevents gradient spikes under Muon/AdamW.
-	- Optimized with PyTorch SDPA (FlashAttention / MemEfficient kernel).
+	- Full bidirectional non-causal attention across all tokens.
+	- QK-Norm (RMSNorm on Q and K) prevents gradient spikes under Muon/AdamW.
+	- Hardware-accelerated with native PyTorch SDPA (FlashAttention-2 / MemEfficient kernels).
 	"""
 
 	def __init__(self, cfg: ModelConfig):
@@ -113,7 +101,10 @@ class GatedGQA(Module):
 		)
 
 		attn_out = attn_out.transpose(1, 2).contiguous().view(bsz, seq_len, self.q_dim)
-		return self.o_proj(attn_out), None
+		return self.o_proj(attn_out)
+
+# Backward compatibility alias
+GatedGQA = BidirectionalGQA
 
 
 class TransformerBlock(Module):
@@ -123,7 +114,7 @@ class TransformerBlock(Module):
 		super().__init__()
 		self.layer_idx = layer_idx
 		self.attn_norm = RMSNorm(cfg.d_model)
-		self.attn = GatedGQA(cfg)
+		self.attn = BidirectionalGQA(cfg)
 		self.ffn_norm = RMSNorm(cfg.d_model)
 		self.mlp = SwiGLUMLP(cfg.d_model, cfg.d_ff, cfg.dropout)
 
@@ -132,8 +123,8 @@ class TransformerBlock(Module):
 		x: torch.Tensor,
 		rope: RotaryEmbed,
 		attention_mask: Optional[torch.Tensor] = None
-	) -> Tuple[torch.Tensor, None]:
-		attn_out, _ = self.attn(self.attn_norm(x), rope, attention_mask)
+	) -> torch.Tensor:
+		attn_out = self.attn(self.attn_norm(x), rope, attention_mask)
 		h = x + attn_out
 		out = h + self.mlp(self.ffn_norm(h))
-		return out, None
+		return out

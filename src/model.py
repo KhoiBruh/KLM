@@ -20,8 +20,8 @@ import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
 from .attention import (
+	BidirectionalGQA,
 	GatedGQA,
-	LayerKVCache,
 	TransformerBlock,
 )
 from .checkpoint import (
@@ -42,13 +42,10 @@ from .layers import (
 
 @dataclass
 class ModelOutput:
-	"""Unified model output structure for LLaDA."""
+	"""Unified model output structure for discrete masked diffusion."""
 
 	logits: torch.Tensor
 	loss: Optional[torch.Tensor] = None
-	ntp_loss: Optional[torch.Tensor] = None
-	mtp_loss: Optional[torch.Tensor] = None
-	kv_caches: Optional[List[LayerKVCache]] = None
 
 
 class KLMModel(nn.Module):
@@ -73,7 +70,14 @@ class KLMModel(nn.Module):
 		self.vocab_size = self.cfg.vocab_size
 		self.d_model = self.cfg.d_model
 		self.n_layers = self.cfg.n_layers
+		self.pad_token_id = getattr(self.cfg, "pad_token_id", 0)
+		self.bos_token_id = getattr(self.cfg, "bos_token_id", 1)
+		self.eos_token_id = getattr(self.cfg, "eos_token_id", 2)
+		self.unk_token_id = getattr(self.cfg, "unk_token_id", 3)
 		self.mask_token_id = getattr(self.cfg, "mask_token_id", 4)
+		self.user_token_id = getattr(self.cfg, "user_token_id", 5)
+		self.assistant_token_id = getattr(self.cfg, "assistant_token_id", 6)
+		self.newline_token_id = getattr(self.cfg, "newline_token_id", 208)
 		self.sampling_steps = getattr(self.cfg, "sampling_steps", 64)
 
 		self.tok_embeddings = nn.Embedding(self.vocab_size, self.d_model)
@@ -139,12 +143,11 @@ class KLMModel(nn.Module):
 		for layer in self.layers:
 			if self.training and self.gradient_checkpointing:
 				def _custom_forward(hidden_in: torch.Tensor, block: TransformerBlock = layer) -> torch.Tensor:
-					out_tensor, _ = block(hidden_in, self.rope, attention_mask=attention_mask)
-					return out_tensor
+					return block(hidden_in, self.rope, attention_mask=attention_mask)
 
 				x = checkpoint(_custom_forward, x, use_reentrant=False)
 			else:
-				x, _ = layer(x, rope=self.rope, attention_mask=attention_mask)
+				x = layer(x, rope=self.rope, attention_mask=attention_mask)
 
 		hidden_states = self.norm(x)
 
@@ -178,8 +181,6 @@ class KLMModel(nn.Module):
 		return ModelOutput(
 			logits=torch.empty((0,), device=x.device),
 			loss=loss,
-			ntp_loss=loss.detach(),
-			mtp_loss=None,
 		)
 
 	@torch.no_grad()
@@ -238,14 +239,21 @@ class KLMModel(nn.Module):
 				out = self(input_ids=x[:, :b_end])
 				logits = out.logits[:, b_start:b_end, :].clone()  # (B, cur_block_len, V)
 
-				# Disallow predicting control tokens (<|pad|>=0, <|bos|>=1, <|unk|>=3, <|mask|>=4)
-				for banned_id in (0, 1, 3, self.mask_token_id):
+				# Disallow predicting control tokens (<|pad|>, <|bos|>, <|unk|>, <|mask|>)
+				banned_control_ids = (
+					self.pad_token_id, self.bos_token_id, self.unk_token_id, self.mask_token_id
+				)
+				for banned_id in banned_control_ids:
 					if 0 <= banned_id < self.vocab_size:
 						logits[:, :, banned_id] = -float("inf")
 
 				# Prevent immediate leading newline collapse at the start of generation
-				if b_idx == 0 and cur_block_len > 0 and 208 < self.vocab_size:
-					logits[:, 0, 208] -= 5.0
+				if (
+					b_idx == 0 and
+					cur_block_len > 0 and
+					0 <= self.newline_token_id < self.vocab_size
+				):
+					logits[:, 0, self.newline_token_id] -= 5.0
 
 				# Apply sliding-window repetition penalty on GPU (skips special tokens and digits)
 				if repetition_penalty > 1.0:
@@ -310,17 +318,17 @@ class KLMModel(nn.Module):
 				if step_callback is not None:
 					step_callback(min(global_step, effective_total_steps), effective_total_steps, x.detach())
 
-			# Check if any sequence emitted <|eos|> (2) or <|user|> (5) in this block
-			eos_id = 2
-			user_id = 5
+			# Check if any sequence emitted <|eos|> or <|user|> in this block
 			stopped_seqs = 0
 			for b in range(bsz):
 				block_toks = x[b, b_start:b_end]
-				stop_hits = torch.where((block_toks == eos_id) | (block_toks == user_id))[0]
+				stop_hits = torch.where(
+					(block_toks == self.eos_token_id) | (block_toks == self.user_token_id)
+				)[0]
 				if len(stop_hits) > 0:
 					stop_abs = b_start + int(stop_hits[0].item())
 					if stop_abs + 1 < total_len:
-						x[b, stop_abs + 1:] = eos_id
+						x[b, stop_abs + 1:] = self.eos_token_id
 					stopped_seqs += 1
 
 			if stopped_seqs == bsz:
@@ -334,7 +342,7 @@ __all__ = [
 	"RMSNorm",
 	"RotaryEmbed",
 	"SwiGLUMLP",
-	"LayerKVCache",
+	"BidirectionalGQA",
 	"GatedGQA",
 	"TransformerBlock",
 	"ModelOutput",

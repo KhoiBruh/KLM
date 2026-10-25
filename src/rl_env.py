@@ -198,7 +198,15 @@ class GRPOTrainer:
 		amp_dtype: torch.dtype = torch.float32,
 		use_amp: bool = False,
 	) -> Dict[str, float]:
-		"""Executes one complete GRPO policy update on a verifiable math problem."""
+		"""
+		Executes one complete Diffusion-GRPO policy update on a verifiable reasoning task:
+		1. Samples G candidate completions via LLaDA confidence sampler.
+		2. Evaluates task correctness & structure rewards r_i.
+		3. Computes normalized advantage A_i across the group.
+		4. Injects discrete masking noise on generated completions (prompt remains clean).
+		5. Evaluates masked reconstruction log-likelihood under current policy vs reference policy.
+		6. Optimizes PPO/GRPO clipped surrogate objective with KL penalty.
+		"""
 		task = self.env.sample_task()
 		prompt_ids = self.tokenizer.encode(task.prompt)
 		prompt_len = len(prompt_ids)
@@ -216,9 +224,6 @@ class GRPOTrainer:
 					temperature=0.85,
 				).clone()
 
-				ref_out = self.raw_model(input_ids=sequences)
-				ref_log_probs = F.log_softmax(ref_out.logits.float(), dim=-1).detach()
-
 		rewards_list: List[float] = []
 		correct_count = 0
 		for i in range(self.group_size):
@@ -232,36 +237,68 @@ class GRPOTrainer:
 		rewards = torch.tensor(rewards_list, dtype=torch.float32, device=self.device)
 		advantages = compute_group_normalized_advantages(rewards)
 
+		# Construct Diffusion Mask on completion tokens (prompt is kept clean)
+		total_len = sequences.shape[1]
+		comp_len = total_len - prompt_len
+		mask = torch.zeros_like(sequences, dtype=torch.bool)
+
+		# Random masking ratio r ~ [0.3, 0.7] across completions
+		r = torch.empty(self.group_size, 1, device=self.device).uniform_(0.3, 0.7)
+		rand_mat = torch.rand(self.group_size, comp_len, device=self.device)
+		comp_mask = rand_mat < r
+
+		# Ensure at least one token is masked per completion row
+		zero_hits = (comp_mask.sum(dim=-1) == 0)
+		if zero_hits.any():
+			for b in zero_hits.nonzero(as_tuple=True)[0]:
+				rand_idx = torch.randint(0, comp_len, (1,), device=self.device)
+				comp_mask[b, rand_idx] = True
+
+		mask[:, prompt_len:] = comp_mask
+		mask_token_id = getattr(self.raw_model, "mask_token_id", 4)
+		noisy_sequences = sequences.clone()
+		noisy_sequences[mask] = mask_token_id
+
+		# Reference policy forward pass on masked diffusion state
+		with torch.no_grad():
+			with torch.amp.autocast(device_type=self.device.type, dtype=amp_dtype, enabled=use_amp):
+				ref_out = self.raw_model(input_ids=noisy_sequences)
+				ref_logits = ref_out.logits.float()
+				ref_log_probs = F.log_softmax(ref_logits, dim=-1)
+				ref_tok_lp = torch.gather(
+					ref_log_probs, dim=-1, index=sequences.unsqueeze(-1)
+				).squeeze(-1)
+
 		self.model.train()
 		optimizer.zero_grad(set_to_none=True)
 
 		with torch.amp.autocast(device_type=self.device.type, dtype=amp_dtype, enabled=use_amp):
-			out = self.model(input_ids=sequences)
-			logits = out.logits.float()
-			log_probs = F.log_softmax(logits, dim=-1)
-
-			target_ids = sequences
-			token_log_probs = torch.gather(log_probs, dim=-1, index=target_ids.unsqueeze(-1)).squeeze(-1)
-			old_token_log_probs = torch.gather(
-				ref_log_probs, dim=-1, index=target_ids.unsqueeze(-1)
+			curr_out = self.model(input_ids=noisy_sequences)
+			curr_logits = curr_out.logits.float()
+			curr_log_probs = F.log_softmax(curr_logits, dim=-1)
+			curr_tok_lp = torch.gather(
+				curr_log_probs, dim=-1, index=sequences.unsqueeze(-1)
 			).squeeze(-1)
 
-			gen_mask = torch.zeros_like(token_log_probs, dtype=torch.float32)
-			gen_mask[:, prompt_len:] = 1.0
+			# Per-sequence reconstruction log-probability over masked positions
+			mask_f = mask.float()
+			mask_counts = mask_f.sum(dim=-1).clamp(min=1.0)
+			seq_curr_lp = (curr_tok_lp * mask_f).sum(dim=-1) / mask_counts
+			seq_ref_lp = (ref_tok_lp * mask_f).sum(dim=-1) / mask_counts
 
-			log_ratio = old_token_log_probs - token_log_probs
-			kl_per_token = torch.exp(log_ratio.clamp(-10.0, 10.0)) - log_ratio - 1.0
+			log_ratio = seq_curr_lp - seq_ref_lp
+			ratio = torch.exp(log_ratio.clamp(-10.0, 10.0))
 
-			ratio = torch.exp((token_log_probs - old_token_log_probs).clamp(-10.0, 10.0))
-			adv_expanded = advantages.unsqueeze(1)
+			# Clipped PPO/GRPO surrogate objective
 			clipped_ratio = torch.clamp(ratio, 0.8, 1.2)
-			surr1 = ratio * adv_expanded
-			surr2 = clipped_ratio * adv_expanded
+			surr1 = ratio * advantages
+			surr2 = clipped_ratio * advantages
 			policy_obj = torch.minimum(surr1, surr2)
 
-			token_loss = -(policy_obj - self.kl_coef * kl_per_token) * gen_mask
-			denom = gen_mask.sum().clamp(min=1.0)
-			loss = token_loss.sum() / denom
+			# KL divergence penalty
+			kl_per_seq = torch.exp(-log_ratio.clamp(-10.0, 10.0)) + log_ratio - 1.0
+
+			loss = -(policy_obj - self.kl_coef * kl_per_seq).mean()
 
 		if scaler is not None and scaler.is_enabled():
 			scaler.scale(loss).backward()
@@ -279,5 +316,5 @@ class GRPOTrainer:
 			"mean_reward": float(rewards.mean().item()),
 			"max_reward": float(rewards.max().item()),
 			"accuracy": float(correct_count) / float(self.group_size),
-			"kl": float(((kl_per_token * gen_mask).sum() / denom).detach().item()),
+			"kl": float(kl_per_seq.mean().detach().item()),
 		}

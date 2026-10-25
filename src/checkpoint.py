@@ -66,7 +66,6 @@ def est_config_params(cfg: Union[FullConfig, ModelConfig]) -> Dict[str, Any]:
 	return {
 		"training_params": inference_params,
 		"inference_params": inference_params,
-		"mtp_params": 0,
 		"breakdown": {
 			"embeddings_and_lm_head": emb_params,
 			"attention_qkv_o": attn_qkvo_params,
